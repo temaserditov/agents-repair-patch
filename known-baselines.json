@@ -1,0 +1,52 @@
+{
+  "macMedia": {
+    "arm64": {
+      "ffmpeg": {
+        "sha256": "c8ed4c4e6978a03c485edbfe4e0a5dc2380f8a30bba5150531b31b094492d924",
+        "url": "https://ffmpeg.martin-riedl.de/download/macos/arm64/1789931890_9.0.2/ffmpeg.zip"
+      },
+      "ffprobe": {
+        "sha256": "fcbe839537485eaee7a7a8bc5cbc0f90d53617e80943e8a5b2e31cb851197ea6",
+        "url": "https://ffmpeg.martin-riedl.de/download/macos/arm64/1789931890_9.0.2/ffprobe.zip"
+      }
+    },
+    "x86_64": {
+      "ffmpeg": {
+        "sha256": "7c6b4125b191cbf773832dc51f424cf2b6bb7da43007d1e066f95909e47cacd4",
+        "url": "https://ffmpeg.martin-riedl.de/download/macos/amd64/1789931006_9.0.2/ffmpeg.zip"
+      },
+      "ffprobe": {
+        "sha256": "2322438ed2f6319a691291b247d09c69dcaa3a982460d1f269a7e1af335cfdfd",
+        "url": "https://ffmpeg.martin-riedl.de/download/macos/amd64/1789931006_9.0.2/ffprobe.zip"
+      }
+    }
+  },
+  "ownerPathsRegex": "knowledge/voice(?:bank)?/|corpus-findings|owner-sample-routing|project-writing/references/owner-|READY_CHECKLIST|validate-final-copy|VoiceBank",
+  "panel": {
+    "runner.py": {
+      "1f00846163e636c8e1537b296b3bbf48b7019d002a8ce9bdda0275de68948a34": "original-0.3.0",
+      "5ee341cd96fdb83ed916af4c640f4de586344c53ecca0b38b13a2a6dfc10fb9f": "updated-2026-11-05"
+    },
+    "server.mjs": {
+      "148a88a6906f527803d316884de47a9d29214e4542ed4830af21931dcce5f9d0": "updated-2026-11-05",
+      "159703016e7dc87d4a101a7f9e929ff1e7c70d0919f32dcb67ee4dd9c216a89b": "mac-installer-transform",
+      "26f3533321202c89c5c87e0e01ee0579d91cfac23ad8990ae7d11bafdd228f17": "accepted-predecessor",
+      "36c956c10b65c9d95466c3c3ef05c43a5c1624cb0e4ab8f628b87e26ad40cf56": "accepted-predecessor",
+      "658e1f7aebc8fd9a1f07f25ad84c4fccbf67072de56058debaf5cdeaa5d8c849": "accepted-predecessor",
+      "6acd72f9fddb8bd6bd6eff26189a62f6e04d9f16449dbdaeffe034c0e734fd7f": "accepted-predecessor",
+      "8e18dbb8c22f0e78582bc15ecfb68804885423d90f394253a30fc141fc7951c9": "original-0.3.0",
+      "ac8bc765554010062c9bdf0ecf1bdc1856cbc15e13840d316298cbde2c70798d": "accepted-predecessor",
+      "c80f2e16dc7709d711abc1db43e3c3da01378a24b364837f133e34a9773969e9": "updated-2026-11-05",
+      "cb0295f51b4f9f2dfeb10b02bc71a37f41a5573f6d97a2eaba80ae47d66c6e04": "accepted-predecessor"
+    }
+  },
+  "revision": "agents-release-20261105.1",
+  "schemaVersion": 1,
+  "upstreamSoulHashes": [
+    "2765a846e1bb371d78d3b93b403dfb0f8d1ba1a9895edb5f608367abfe81194d",
+    "36c1f5a2e92cd1d018311eaf4c8f1e8886672eae78212e033c681d0e3d5d506f",
+    "6bc146a50e8fe3bd555e89a77e93af1f781cece8cf549f0d7a02ee2389811c72",
+    "731f9a403cdc6a5c5c0e5c956a9238f54dae8b6e253bc29f9e47efb38eb6081a",
+    "82fa3438d86f8b95c6e96be89d853c8b561b3e6973ed61c90e70e0231dd24a7e"
+  ]
+}

@@ -1,0 +1,20 @@
+{
+  "commit": "552dbdd5105cc785ae6c43841e0b8bba03ab5a5b",
+  "files": {
+    "README.md": "d0607a39b1a2c40a7605be309eab6e4bdd78abaaff318c5afea8b412e74db4f0",
+    "agents_repair.py": "5b94844be18adc2c85c6c429499e3c2f12c62a9604b83eaeec6fc45c6ffaf0af",
+    "known-baselines.json": "b77b706454a3fa30fd8be27536acc5344103afda52f68fbe127db3b9738f1b65",
+    "repair.ps1": "7b754be2488a45546261ed39706c2a224fab4acac751a88c1e18d34ba45f0e8d",
+    "repair.sh": "7c34c48086f8520f77e6172fea4f0bd10ab82d8adb6672a3c39a23921e835cf7",
+    "tests/test_agents_repair.py": "d04d3c30f5722953db0fdfd1e543f72ff3056355157dc82517dd0c17316101f2",
+    "vendor/agents-diagnose.mjs": "feddd9d6b597cd6ed00b67c9e78d164c12ccde22003910e3968e049fd805e5d0",
+    "vendor/designer-tools.py": "48a8f4b2de3714c30189a19e4de35242610f372c104e894b63abc6230c2f5f69",
+    "vendor/profile-probe.py": "459b0b1a0dff8c08b6e1c938402f3f6f21cb28c345bf5de9ae72c9a2e7ecf42a",
+    "vendor/security-tools.py": "bb6b6ce6b5223555e0d331a17a14a38380db3c52d30ac1e454f13d9642dbf90f",
+    "vendor/student-runtime.py": "ab12b6e49d299262afb5203bc3c9632d9c8e1af48651e6c9932ea157b9121a80",
+    "vendor/student-skill-repairs.py": "56e4e2a1b5cf7c4b4321d207b39e82a1412ae9b62c20d3b3c7e3b464d031c45c",
+    "ЗАДАНИЕ-ДЛЯ-CODEX.md": "fb9df21c35421b1198a84462dfd462ea526ead242ab6299a843813e9deed1712"
+  },
+  "schemaVersion": 1,
+  "version": "v2026.11.05.1"
+}
