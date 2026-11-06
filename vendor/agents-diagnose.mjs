@@ -147,7 +147,34 @@ export function saveReport(owner,value){
   }catch{}
   return null;
 }
-export async function main({owner=os.homedir()}={}){
+// Installation may finish with explicitly preserved personal files. Standalone
+// diagnostics must still report their real condition and return exit 3.
+export function preservedApplyWarnings(owner,manifest,files,home) {
+  try {
+    const root=path.join(owner,'InfobizAgents/control/tariffs');
+    const apply=json(path.join(root,'last-apply.json')),state=json(path.join(root,'tariff-files.json'));
+    if(!Array.isArray(apply.conflicts)||new Set(apply.conflicts).size!==apply.conflicts.length||
+       !apply.conflicts.every(p=>validPath(p)&&Object.hasOwn(manifest.files,p))||
+       !Array.isArray(apply.merged)||!Array.isArray(apply.mergedTrailing)||
+       !Array.isArray(apply.missingInstructions)||apply.missingInstructions.length||
+       !Array.isArray(apply.invalidSouls)||apply.invalidSouls.length||
+       !Array.isArray(apply.contentConflicts)||apply.contentConflicts.length||
+       JSON.stringify(apply.profiles)!==JSON.stringify(manifest.profiles)||apply.tier!==manifest.tier||
+       !state.packageFiles||typeof state.revision!=='string'||
+       (manifest.revision!=='local-record'&&state.revision!==manifest.revision)||
+       !Object.entries(manifest.files).every(([n,h])=>h===(manifest.revision==='local-record'?state.files[n]:state.packageFiles[n])))return false;
+    const problems=files.filter(f=>f.state!=='ok');
+    return problems.length>0&&problems.every(f=>{
+      if(apply.conflicts.includes(f.path))return ['changed','unreadable','linked','oversized'].includes(f.state);
+      // An online manifest names package hashes; a completed merge has its own
+      // recorded result hash. Only those exact installed bytes qualify.
+      if(f.state!=='changed'||!home||!validPath(f.path)||!state.files[f.path]||state.files[f.path]===state.packageFiles[f.path])return false;
+      const file=path.join(home,'profiles',...f.path.split('/'));
+      return plain(file)&&sha(fs.readFileSync(file))===state.files[f.path];
+    });
+  } catch {return false;}
+}
+export async function main({owner=os.homedir(),afterInstall=false}={}){
   let transport=null,manifest,basis='server';
   try{transport=connection(owner);manifest=validateManifest(await requestJson(transport.url,transport.credential));}
   catch{basis='local';try{manifest=localManifest(owner);}catch{
@@ -184,8 +211,12 @@ export async function main({owner=os.homedir()}={}){
   else console.log('Не удалось сохранить файл проверки.');
   const loaderReady=observed.every(p=>p.probe==='ok'&&p.instructions==='loaded'&&p.skills.length===Object.keys(manifest.files).filter(f=>f.startsWith(p.name+'/skills/')&&f.endsWith('/SKILL.md')).length);
   const blocked=observed.some(p=>['cli','telegram'].some(platform=>p.toolAccess?.[platform]==='blocked'));
+  if(afterInstall&&loaderReady&&!blocked&&preservedApplyWarnings(owner,manifest,files,rt?.home)) {
+    console.log('Установка завершена. Нестандартные личные файлы сохранены; их состояние указано в отчёте проверки.');
+    return 0;
+  }
   return problems.length||!loaderReady||blocked?3:0;
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(fs.realpathSync(process.argv[1])).href){
-  main().then(code=>{process.exitCode=code;}).catch(()=>{console.log('Проверка не завершена. Настройки и данные не менялись.');process.exitCode=2;});
+  main({afterInstall:process.argv.includes('--after-install')}).then(code=>{process.exitCode=code;}).catch(()=>{console.log('Проверка не завершена. Настройки и данные не менялись.');process.exitCode=2;});
 }

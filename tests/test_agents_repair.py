@@ -257,6 +257,9 @@ class RepairTests(unittest.TestCase):
                     calls.clear();r.panel_api(True)
                     expected='skipped:user-soul' if personal and not other and not endpoint_failure else 'unfixable'
                     self.assertEqual(r.findings[-1]['status'],expected)
+                    if expected=='skipped:user-soul':
+                        self.assertIn('повтори штатное обновление, оно перенесёт правки',r.findings[-1]['detail'])
+                        self.assertNotIn('поддержк',r.findings[-1]['detail'])
                     self.assertEqual(r.result()['exitCode'],0 if expected=='skipped:user-soul' else 2)
                     self.assertEqual(r.findings[-1]['severity'],'warning' if expected=='skipped:user-soul' else 'error')
                     self.assertEqual(calls,['tool-policy','audit','agents/designer/preflight'])
@@ -337,6 +340,9 @@ class RepairTests(unittest.TestCase):
     def test_vendor_and_generated_baselines_match_sources(self):
         for name,source in {'student-skill-repairs.py':ROOT/'installer/packages/shared','designer-tools.py':ROOT/'installer/packages/shared','student-runtime.py':ROOT/'installer/packages/shared','security-tools.py':ROOT/'installer/packages/shared','agents-diagnose.mjs':ROOT/'apps/lms/installer-assets/diagnostics','profile-probe.py':ROOT/'apps/lms/installer-assets/diagnostics'}.items():
             self.assertEqual((BUNDLE/'vendor'/name).read_bytes(),(source/name).read_bytes(),name)
+        task=(BUNDLE/'ЗАДАНИЕ-ДЛЯ-CODEX.md').read_text()
+        self.assertIn('автоматически перенесёт личные',task)
+        self.assertNotIn('написать в поддержку',task)
         builder=module('baselines',ROOT/'installer/scripts/build-repair-baselines.py')
         self.assertEqual(json.loads((BUNDLE/'known-baselines.json').read_text()),builder.build())
         self.assertIn(repair.sha(repair.normalized_soul(upstream_bytes())),builder.build()['upstreamSoulHashes'])
@@ -354,7 +360,7 @@ class RepairTests(unittest.TestCase):
             for name,digest in manifest['files'].items():self.assertEqual(repair.sha(archive.read(name)),digest)
     def test_verify_current_windows_exits_zero(self):
         f=self.fixture('Windows');f.run(True)
-        state=json.loads((f.control/'tariff-files.json').read_text());state['revision']='agents-release-20261105.1'
+        state=json.loads((f.control/'tariff-files.json').read_text());state['revision']='agents-release-20261105.2'
         write(f.control/'tariff-files.json',json.dumps(state))
         for name in repair.PACKAGE_HELPERS:write(f.control/'post-install'/name,'fixture')
         for name in ['carousel-style-brief','motion-brief-builder']:write(f.profiles/'designer/skills'/name/'SKILL.md','fixture')
@@ -417,7 +423,13 @@ class RepairTests(unittest.TestCase):
         payload=buffer.getvalue();r.baselines['macMedia']['arm64']['ffmpeg']['sha256']=repair.sha(payload)
         response=io.BytesIO(payload);response.url='https://ffmpeg.martin-riedl.de/fixture.zip'
         target=f.home/'.local/bin/ffmpeg';write(target,b'broken x86 executable')
-        with patch.object(repair.platform,'machine',return_value='arm64'),patch.object(repair,'command',return_value=subprocess.CompletedProcess([],0,'15.7.7','')),patch.object(repair.urllib.request,'urlopen',return_value=response):
+        def download(req, timeout):
+            if req.get_header('User-agent')!='SerditovAgentsRepair/1.0':
+                raise repair.urllib.error.HTTPError(req.full_url,403,'CDN rejects default Python client',None,None)
+            self.assertEqual(req.get_header('Accept'),'application/zip')
+            self.assertEqual(timeout,30)
+            return response
+        with patch.object(repair.platform,'machine',return_value='arm64'),patch.object(repair,'command',return_value=subprocess.CompletedProcess([],0,'15.7.7','')),patch.object(repair.urllib.request,'urlopen',side_effect=download):
             r.mac_media({'ffmpeg':False,'ffprobe':True},'')
         self.assertEqual(r.findings[-1]['status'],'fixed');self.assertEqual(target.read_bytes(),b'fixture executable')
         self.assertEqual((r.backup/'media/ffmpeg').read_bytes(),b'broken x86 executable')
@@ -427,7 +439,7 @@ class RepairTests(unittest.TestCase):
         r.security.repair_tirith=lambda home,log:'tirith:skipped:download_failed'
         before=tree(f.home);r.tirith();self.assertEqual(tree(f.home),before);self.assertFalse(r.changed)
     def test_rehearsals_can_be_imported_without_native_execution(self):
-        for name in ['mac-repair-rehearsal.mjs','ubuntu-repair-rehearsal.mjs','windows-repair-native-rehearsal.mjs']:
+        for name in ['mac-patch-rehearsal.mjs','ubuntu-patch-rehearsal.mjs','windows-patch-native-rehearsal.mjs']:
             result=subprocess.run(['node',str(ROOT/'scripts'/name),'--describe'],capture_output=True,text=True)
             self.assertEqual(result.returncode,0);self.assertFalse(json.loads(result.stdout)['native'])
     def test_content_readiness_models_match_overlay(self):
@@ -558,8 +570,8 @@ class RepairTests(unittest.TestCase):
             cfg={'stt':{'language':'ru','groq':{'language':'ru'},'local':{'language':'ru'}},
                  'platform_toolsets':{'web':['file','terminal','code_execution','web','image_gen']}}
             write(p/'config.yaml',yaml.safe_dump(cfg))
-            write(p/'SOUL.md',('personal tech text' if name=='tech' else 'agents-profile-identity-v1 '+identity))
-            write(p/'AGENTS.md','Packaged instructions')
+            write(p/'SOUL.md','agents-profile-identity-v1 '+identity)
+            write(p/'AGENTS.md','agents-profile-identity-v1 '+identity)
             files[name+'/SOUL.md']=repair.sha((p/'SOUL.md').read_bytes())
         write(home/'InfobizAgents/control/tariffs/tariff-files.json',json.dumps({'files':files}))
         write(home/'InfobizAgents/install.log','fixture')
@@ -598,6 +610,7 @@ class RepairTests(unittest.TestCase):
         with patch.dict(sys.modules,{'hermes_cli':parent,'hermes_cli.default_soul':default,'hermes_cli.gateway':gateway}),patch.object(sys,'platform','linux'),patch.dict(os.environ,{}):
             # The old package has no identity marker.
             (home/'.hermes/profiles/marketer/SOUL.md').write_bytes(b'old packaged marketer')
+            (home/'.hermes/profiles/tech/SOUL.md').write_bytes(b'old packaged tech')
             sales=home/'.hermes/profiles/sales/config.yaml'
             data=yaml.safe_load(sales.read_text());data['kanban']={'dispatch_in_gateway':False};write(sales,yaml.safe_dump(data))
             self.assertTrue(self.run_native_fixture(home,'seed')['pass'])
@@ -610,8 +623,8 @@ class RepairTests(unittest.TestCase):
         self.assertEqual((home/'.config/systemd/user/hermes-gateway.service').read_bytes(),unit_bytes)
     def test_rehearsal_panel_checks_failed_checks_and_exact_profile(self):
         home=self.native_fixture_home()
-        responses={'audit':{'ok':False,'checks':[{'id':'instructions','ok':False}],
-                            'agents':[{'id':p,'instructions':p!='tech'} for p in ['designer','tech']]},
+        responses={'audit':{'ok':True,'checks':[],
+                            'agents':[{'id':p,'instructions':True} for p in ['designer','tech']]},
                    'tool-policy':{'ok':True,'checks':[]},'agents/designer/preflight':{'ok':True,'checks':[]}}
         class Handler(BaseHTTPRequestHandler):
             def do_GET(self):
@@ -622,7 +635,7 @@ class RepairTests(unittest.TestCase):
         server=ThreadingHTTPServer(('127.0.0.1',0),Handler);thread=Thread(target=server.serve_forever);thread.start()
         def run():return self.run_native_fixture(home,'native-panel','http://127.0.0.1:'+str(server.server_port),'web_shell_token=synthetic')
         try:
-            result=run();self.assertTrue(result['pass']);self.assertFalse(result['native']['audit']['pass']);self.assertEqual(result['identityProfiles'],['tech'])
+            result=run();self.assertTrue(result['pass']);self.assertTrue(result['native']['audit']['pass']);self.assertEqual(result['identityProfiles'],[])
             responses['audit']['agents'][0]['instructions']=False
             with self.assertRaises(AssertionError):run()
             responses['audit']['agents'][0]['instructions']=True
@@ -647,7 +660,7 @@ class RepairTests(unittest.TestCase):
                     data=archive.extractfile(member).read();write(f.profiles/name,data);f.files[name]=repair.sha(data)
         for name in helpers:write(f.control/'post-install'/name,'fixture')
         r=repair.Repair(f.home,f.install,'Darwin',f.hermes);r.files=f.files;r.names=list(repair.NAMES)
-        for revision,expected in [('agents-native-content-20261103.1','needs-platform-update'),('agents-release-20261105.1','unchanged')]:
+        for revision,expected in [('agents-native-content-20261103.1','needs-platform-update'),('agents-release-20261105.1','needs-platform-update'),('agents-release-20261105.2','unchanged')]:
             r.state={'revision':revision};r.findings=[];before=tree(f.home);r.skills()
             findings={f['code']:f for f in r.findings}
             self.assertEqual(findings['managed-skills']['status'],expected)
@@ -685,7 +698,7 @@ class RepairTests(unittest.TestCase):
 
     def test_non_utf8_warning_alone_does_not_change_exit(self):
         f=self.fixture('Windows');f.run(True)
-        state=repair.json_file(f.control/'tariff-files.json');state['revision']='agents-release-20261105.1';write(f.control/'tariff-files.json',json.dumps(state))
+        state=repair.json_file(f.control/'tariff-files.json');state['revision']='agents-release-20261105.2';write(f.control/'tariff-files.json',json.dumps(state))
         for name in repair.PACKAGE_HELPERS:write(f.control/'post-install'/name,'fixture')
         write(f.install/'control/watchdog.js','fixture');write(f.install/'control/webshell-runtime.json','{"recoveryEnabled":true}')
         path=f.profiles/'tech/SOUL.md';path.write_bytes('Личный текст'.encode('cp1251'));before=tree(f.home)
@@ -720,6 +733,38 @@ class RepairTests(unittest.TestCase):
             for code in [401,403]:
                 status[0]=code;r=run();self.assertEqual(r.findings[-1]['status'],'skipped:panel-auth-required');self.assertEqual(r.result()['exitCode'],0)
                 self.assertEqual(run('/?token=test').findings[-1]['status'],'unfixable')
+        finally:server.shutdown();server.server_close();thread.join()
+
+    def test_panel_exact_unreadable_apply_exception_stays_warning(self):
+        responses={'tool-policy':{'ok':True},'agents/designer/preflight':{'ok':True},
+                   'audit':{'ok':False,'checks':[{'id':'instructions','ok':False}],
+                            'agents':[{'id':'tech','instructions':False},{'id':'designer','instructions':True}]}}
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.rfile.read(int(self.headers.get('Content-Length',0)))
+                self.send_response(200);self.end_headers();self.wfile.write(json.dumps(responses[self.path.removeprefix('/api/')]).encode())
+            do_POST=do_GET
+            def log_message(self,*args):pass
+        server=ThreadingHTTPServer(('127.0.0.1',0),Handler);thread=Thread(target=server.serve_forever);thread.start()
+        try:
+            f=self.fixture();path=f.profiles/'tech/SOUL.md';path.write_bytes('Личный текст'.encode('cp1251'));before=path.read_bytes()
+            write(f.install/'web-shell.url','http://127.0.0.1:'+str(server.server_port))
+            write(f.control/'last-apply.json',json.dumps({'conflicts':['tech/SOUL.md']}))
+            def run(revision=None):
+                r=repair.Repair(f.home,f.install,'Darwin',f.hermes,verify=True)
+                r.files=repair.json_file(f.control/'tariff-files.json')['files'];r.state={'revision':revision or r.baselines['revision']}
+                r.soul('tech');r.panel_api(True);return r
+            r=run();self.assertEqual(r.findings[-1]['status'],'skipped:unreadable-instructions');self.assertEqual(r.result()['exitCode'],0)
+            self.assertEqual(path.read_bytes(),before)
+            responses['audit']['agents'][1]['instructions']=False
+            self.assertEqual(run().findings[-1]['status'],'unfixable')
+            responses['audit']['agents'][1]['instructions']=True
+            responses['audit']['checks'].append({'id':'sessions','ok':False})
+            self.assertEqual(run().findings[-1]['status'],'unfixable')
+            responses['audit']['checks'].pop()
+            self.assertEqual(run('old-revision').findings[-1]['status'],'unfixable')
+            write(f.control/'last-apply.json','{"conflicts":[]}')
+            self.assertEqual(run().findings[-1]['status'],'unfixable')
         finally:server.shutdown();server.server_close();thread.join()
 
     def test_missing_linux_user_unit_masks_in_advance(self):
@@ -853,25 +898,25 @@ class RepairTests(unittest.TestCase):
         self.assertIn('chmod 700 "$HOME/old-install.sh"\\n"$HOME/old-install.sh"',install)
         self.assertNotIn('bash "$HOME/old-install.sh"',install)
         self.assertIn("'vendor/student-skill-repairs.py'",source)
-        windows=(ROOT/'scripts/windows-repair-native-rehearsal.mjs').read_text()
+        windows=(ROOT/'scripts/windows-patch-native-rehearsal.mjs').read_text()
         self.assertNotIn('.read_text()',windows);self.assertNotIn('.write_text(',windows)
         self.assertIn(".write_bytes(soul.encode('utf-8'))",windows)
         self.assertIn("json.dumps(saved,ensure_ascii=False).encode('utf-8')",windows)
 
     def test_rehearsal_strict_posix_verdict(self):
         findings=[{'code':c,'status':'unchanged'} for c in ['package-revision','managed-skills','package-helpers','webshell','linux-single-gateway']]
-        findings += [{'code':'soul:tech','status':'skipped:user-text'},{'code':'panel-api','status':'skipped:user-soul'}]
+        findings += [{'code':'soul:'+name,'status':'unchanged'} for name in ['marketer','copywriter','tech']] + [{'code':'panel-api','status':'unchanged'}]
         native={'verify':{'exitCode':0,'findings':findings},'apply':{'findings':[{'code':'soul:marketer','status':'fixed'}]},
                 'repeat':{'changed':False,'findings':[{'code':'linux-gateway-owner','status':'unchanged'}]},
                 'repaired':{'pass':True,'gateway':{'gatewayCount':1,'gatewayPids':[52],'mainPid':52,'activeState':'active','nRestarts':0,'stableSeconds':30,'userUnitMasked':True}},
-                'config':{'pass':True,'native':{'check':'config','pass':False,'errorType':'AssertionError','reason':'tech identity'}},
-                'panel':{'pass':True,'identityProfiles':['tech'],'native':{'pass':False,'tool-policy':{'pass':True,'failedChecks':[]},'preflight':{'pass':True,'failedChecks':[]},'audit':{'pass':False,'failedChecks':['instructions']}}},'full-tools':{'pass':True},'logs':{'pass':True}}
+                'config':{'pass':True,'native':{'check':'config','pass':True}},
+                'panel':{'pass':True,'identityProfiles':[],'native':{'pass':True,'tool-policy':{'pass':True,'failedChecks':[]},'preflight':{'pass':True,'failedChecks':[]},'audit':{'pass':True,'failedChecks':[]}}},'full-tools':{'pass':True},'logs':{'pass':True}}
         code="import {assertPosixRepairVerdict as check} from './scripts/lib/repair-native-rehearsal.mjs'; const n=JSON.parse(process.argv[1]);check(n,false);check(n,true);"
         def run(value):return subprocess.run(['node','--input-type=module','-e',code,json.dumps(value)],capture_output=True).returncode
         self.assertEqual(run(native),0)
         import copy
         cases=[(['verify','findings',i,'status'],'needs-platform-update') for i in range(len(findings))]
-        cases += [(['config','native','reason'],'other failure'),(['panel','native','audit','failedChecks'],['instructions','sessions']),(['panel','identityProfiles'],['tech','designer']),(['full-tools','pass'],False),(['logs','pass'],False),(['apply','findings',0,'status'],'unchanged')]
+        cases += [(['config','native','pass'],False),(['panel','native','audit','failedChecks'],['instructions','sessions']),(['panel','identityProfiles'],['tech','designer']),(['full-tools','pass'],False),(['logs','pass'],False),(['apply','findings',0,'status'],'unchanged')]
         cases += [(['repeat','changed'],True),(['repeat','findings',0,'status'],'fixed'),(['repaired','pass'],False)]
         cases += [(['repaired','gateway',key],value) for key,value in [('gatewayCount',2),('gatewayPids',[51,52]),('mainPid',51),('activeState','activating'),('nRestarts',-1),('stableSeconds',0),('userUnitMasked',False)]]
         for path,value in cases:
@@ -879,6 +924,24 @@ class RepairTests(unittest.TestCase):
             for key in path[:-1]:target=target[key]
             target[path[-1]]=value
             self.assertNotEqual(run(changed),0,path)
+
+    def test_windows_rehearsal_accepts_only_merge_then_no_write_repeat(self):
+        code="""import assert from 'node:assert/strict';
+import {assertWindowsRepairUpgrade as check} from './scripts/windows-patch-native-rehearsal.mjs';
+const first={merged:['tech/SOUL.md'],conflicts:[]}, repeat={changed:0,merged:[],conflicts:[]};
+const text=Buffer.from('agents-profile-identity-v1\\nREPAIR_STUDENT_SOUL_ADDITION');
+check(first,repeat,text,text,123,123);
+for(const args of [
+ [{merged:[],conflicts:[]},repeat,text,text,123,123],
+ [first,{...repeat,changed:1},text,text,123,123],
+ [first,{...repeat,merged:['tech/SOUL.md']},text,text,123,123],
+ [first,{...repeat,conflicts:['tech/SOUL.md']},text,text,123,123],
+ [first,repeat,text,Buffer.from('lost'),123,123],
+ [first,repeat,text,text,123,124],
+])assert.throws(()=>check(...args));
+"""
+        result=subprocess.run(['node','--input-type=module','-e',code],capture_output=True,text=True)
+        self.assertEqual(result.returncode,0,result.stderr)
 
     def test_rehearsal_linux_stability_uses_actual_gateway_not_timestamp_wrapper(self):
         source=ast.parse((ROOT/'installer/tests/repair_native_checks.py').read_text())
@@ -1057,7 +1120,7 @@ class RepairTests(unittest.TestCase):
                 finally:write(path,before)
 
     def test_ci_layout_and_debug_handoff_are_wired(self):
-        windows=(ROOT/'scripts/windows-repair-native-rehearsal.mjs').read_text()
+        windows=(ROOT/'scripts/windows-patch-native-rehearsal.mjs').read_text()
         self.assertIn("process.env.AGENTS_REPAIR_DEBUG_FILE=join(root,'debug.log')",windows)
         self.assertLess(windows.index("checked('layout'"),windows.index("await run('diagnose'"))
         self.assertIn('ReparsePoint',windows)
@@ -1073,7 +1136,7 @@ class RepairTests(unittest.TestCase):
         if shutil.which('pwsh'):
             source="$t=$null;$e=$null;[Management.Automation.Language.Parser]::ParseFile('"+str(BUNDLE/'repair.ps1')+"',[ref]$t,[ref]$e)|Out-Null;if($e.Count){exit 1}"
             self.assertEqual(subprocess.run(['pwsh','-NoProfile','-Command',source],capture_output=True).returncode,0)
-        for name in ['mac-repair-rehearsal.mjs','ubuntu-repair-rehearsal.mjs','windows-repair-native-rehearsal.mjs']:
+        for name in ['mac-patch-rehearsal.mjs','ubuntu-patch-rehearsal.mjs','windows-patch-native-rehearsal.mjs']:
             self.assertEqual(subprocess.run(['node','--check',str(ROOT/'scripts'/name)],capture_output=True).returncode,0,name)
 
 

@@ -40,7 +40,7 @@
       "cb0295f51b4f9f2dfeb10b02bc71a37f41a5573f6d97a2eaba80ae47d66c6e04": "accepted-predecessor"
     }
   },
-  "revision": "agents-release-20261105.1",
+  "revision": "agents-release-20261105.2",
   "schemaVersion": 1,
   "upstreamSoulHashes": [
     "2765a846e1bb371d78d3b93b403dfb0f8d1ba1a9895edb5f608367abfe81194d",

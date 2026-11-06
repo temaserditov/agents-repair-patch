@@ -646,6 +646,7 @@ class Repair:
         opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
         good = True
         personal_soul = False
+        unreadable_profiles = set()
         try:
             for endpoint, body in [('tool-policy',None), ('audit',None), ('agents/designer/preflight', {'message':'открой файл'})]:
                 headers = {'Content-Type':'application/json'}
@@ -665,14 +666,27 @@ class Repair:
                     agents = result.get('agents', [])
                     affected = [a['id'] for a in agents if a.get('instructions') is False]
                     user_profiles = {f['code'][5:] for f in self.findings if f['code'].startswith('soul:') and f['status']=='skipped:user-text'}
+                    # A preserved non-UTF-8 SOUL remains red in the panel. Only
+                    # that exact current apply exception is a verify warning.
+                    unreadable_profiles = set()
+                    receipt_path = self.control/'last-apply.json'
+                    receipt = self.installed_json(receipt_path, 'package-receipt') if self.unreadable and receipt_path.is_file() else None
+                    if getattr(self, 'state', {}).get('revision') == self.baselines['revision'] and receipt:
+                        recorded = receipt.get('conflicts', [])
+                        if not isinstance(recorded, list):recorded = []
+                        unreadable_profiles = {p.parent.name for p in self.unreadable
+                                               if p.name=='SOUL.md' and p.parent.parent==self.profiles
+                                               and p.parent.name+'/SOUL.md' in recorded}
                     personal_soul = (failed_checks == ['instructions'] and bool(affected)
                                      and len(affected)==len(set(affected))
                                      and all(isinstance(a.get('instructions'), bool) for a in agents)
-                                     and set(affected) == user_profiles)
+                                     and set(affected) == user_profiles | unreadable_profiles)
                     passed = personal_soul
                 good &= passed
-            if good and personal_soul:
-                self.add('panel-api', 'skipped:user-soul', 'Панель отмечает личный текст SOUL без служебного маркера; агенты работают; при желании поддержка добавит маркер', 'warning')
+            if good and personal_soul and unreadable_profiles:
+                self.add('panel-api', 'skipped:unreadable-instructions', 'Панель отмечает сохранённый не-UTF-8 SOUL из conflicts текущего обновления; файл не изменялся.', 'warning')
+            elif good and personal_soul:
+                self.add('panel-api', 'skipped:user-soul', 'Панель отмечает личный текст SOUL без служебного маркера; повтори штатное обновление, оно перенесёт правки и восстановит маркер', 'warning')
             else:
                 self.add('panel-api', 'unchanged' if good else 'unfixable', 'Проверены инструменты, аудит и открытие файла.', 'info' if good else 'error')
         except urllib.error.HTTPError as error:
@@ -806,7 +820,7 @@ class Repair:
                 plain(target)
                 previous = read(target, 256*1024*1024) if target.is_file() else None
                 # Only HTTPS, pinned source, no auth, no externally supplied URLs.
-                req = urllib.request.Request(pins[name]['url'])
+                req = urllib.request.Request(pins[name]['url'], headers={'User-Agent':'SerditovAgentsRepair/1.0','Accept':'application/zip'})
                 with urllib.request.urlopen(req, timeout=30) as response:
                     if urllib.parse.urlsplit(response.url).scheme!='https':
                         raise ValueError('Unsafe media redirect')
