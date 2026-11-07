@@ -542,6 +542,27 @@ class Repair:
         else:
             self.add('tirith', 'unavailable:verifier-retry', 'Повтор не завершён; подпись и источник не обходились.')
 
+    def panel_restart(self):
+        marker=self.control/'web-shell-restart-pending'
+        plain(marker)
+        if self.system not in {'Darwin','Linux'} or not marker.is_file():return
+        if self.system=='Linux':
+            # Marker belongs to this installation; do not inspect account data.
+            result=command(['systemctl','restart','infobiz-web-shell.service'])
+            fixed=result.returncode==0
+            if fixed:marker.unlink()
+            unavailable='skipped:systemctl-unavailable'
+            retry='повторите штатный запуск службы панели'
+        else:
+            result=load('sync-tariff-panel').restart_panel(self.home,self.control)
+            fixed=result['panel']=='configured'
+            unavailable='skipped:launchctl-unavailable'
+            retry='повторите запуск панели из GUI-сессии'
+        if fixed:self.changed=True
+        self.add('webshell-restart-pending','fixed' if fixed else unavailable,
+                 'restart-pending: '+('панель перезапущена' if fixed else retry),
+                 'info' if fixed else 'warning')
+
     def panel(self):
         if self.system=='Windows':
             self.windows()
@@ -731,7 +752,10 @@ class Repair:
         self.content_incomplete = self.tier==3 and not ready
         self.add('windows-content', 'needs-windows-v3' if self.content_incomplete else 'unchanged',
                  'Незавершённый Content: нужен второй блок инструкции (-ResumeContent).' if self.content_incomplete else 'Content не требуется или готов.')
-        self.add('windows-panel-task', 'skipped:v3-update' if not v3 else 'unchanged', 'Задачи не изменяются; восстановление устанавливает v3.')
+        deferred = v3 and config.get('scheduledTasks')=='deferred'
+        self.add('windows-panel-task', 'deferred' if deferred else 'skipped:v3-update' if not v3 else 'unchanged',
+                 'Задачи планировщика отложены: панель запущена как процесс до выхода из системы. Запусти runner.ps1 -RunControl из обычного Windows PowerShell или дай Codex полный доступ.' if deferred else 'Задачи не изменяются; восстановление устанавливает v3.',
+                 'warning' if deferred else 'info')
         if self.verify:
             self.panel_api(v3)
 
@@ -1096,6 +1120,7 @@ class Repair:
             raise ValueError('Unsupported operating system')
         for path in [self.home, self.install, self.hermes, self.profiles, self.control]:
             plain(path)
+        self.panel_restart()
         self.stage = 'package-inventory'
         self.state = self.installed_json(self.control/'tariff-files.json', 'package-inventory')
         if self.state is None:

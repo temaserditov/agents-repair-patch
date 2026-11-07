@@ -149,7 +149,7 @@ export function saveReport(owner,value){
 }
 // Installation may finish with explicitly preserved personal files. Standalone
 // diagnostics must still report their real condition and return exit 3.
-export function preservedApplyWarnings(owner,manifest,files,home) {
+export function preservedApplyWarnings(owner,manifest,files,home,{allowClean=false}={}) {
   try {
     const root=path.join(owner,'InfobizAgents/control/tariffs');
     const apply=json(path.join(root,'last-apply.json')),state=json(path.join(root,'tariff-files.json'));
@@ -164,7 +164,7 @@ export function preservedApplyWarnings(owner,manifest,files,home) {
        (manifest.revision!=='local-record'&&state.revision!==manifest.revision)||
        !Object.entries(manifest.files).every(([n,h])=>h===(manifest.revision==='local-record'?state.files[n]:state.packageFiles[n])))return false;
     const problems=files.filter(f=>f.state!=='ok');
-    return problems.length>0&&problems.every(f=>{
+    return (allowClean||problems.length>0)&&problems.every(f=>{
       if(apply.conflicts.includes(f.path))return ['changed','unreadable','linked','oversized'].includes(f.state);
       // An online manifest names package hashes; a completed merge has its own
       // recorded result hash. Only those exact installed bytes qualify.
@@ -173,6 +173,19 @@ export function preservedApplyWarnings(owner,manifest,files,home) {
       return plain(file)&&sha(fs.readFileSync(file))===state.files[f.path];
     });
   } catch {return false;}
+}
+// Only known diagnostic API gaps can be downgraded after a completed apply.
+// Working loaders with missing instructions/skills and blocked tools still fail.
+export function profileCheckState(manifest,observed) {
+  const expected=p=>Object.keys(manifest.files).filter(f=>f.startsWith(p.name+'/skills/')&&f.endsWith('/SKILL.md'));
+  const ready=p=>p.probe==='ok'&&p.reason!=='api-partial'&&p.instructions==='loaded'&&expected(p).every(f=>p.skills.includes(f));
+  const unsupported=p=>['api-unsupported','module-missing'].includes(p.reason)&&['failed','unavailable'].includes(p.probe)&&p.instructions!=='not-loaded';
+  const partial=p=>p.probe==='ok'&&p.reason==='api-partial'&&p.instructions==='loaded';
+  return {
+    loaderReady:observed.every(ready),
+    compatibilityGap:observed.some(p=>unsupported(p)||partial(p))&&observed.every(p=>ready(p)||unsupported(p)||partial(p)),
+    blocked:observed.some(p=>['cli','telegram'].some(platform=>p.toolAccess?.[platform]==='blocked')),
+  };
 }
 export async function main({owner=os.homedir(),afterInstall=false}={}){
   let transport=null,manifest,basis='server';
@@ -197,7 +210,10 @@ export async function main({owner=os.homedir(),afterInstall=false}={}){
   const report={schemaVersion:1,reportId:crypto.randomUUID(),createdAt:new Date().toISOString(),target:process.platform==='darwin'?'mac':process.platform==='win32'?'windows':'vps',manifestSha256:sha(JSON.stringify(manifest)),files,profiles:observed,tools:rtTools};
   // Save before upload, including when offline. Only finite observations, no raw
   // output, full local paths, file contents, prompts, config or conversations.
-  const saved=saveReport(owner,{basis,manifest,report});
+  const checks=profileCheckState(manifest,observed);
+  const compatibilityWarning=afterInstall&&checks.compatibilityGap&&!checks.blocked&&preservedApplyWarnings(owner,manifest,files,rt?.home,{allowClean:true});
+  const warning='Проверка загрузчика не поддерживает эту версию Hermes, инструкции не подтверждены.';
+  const saved=saveReport(owner,{basis,manifest,report,...(compatibilityWarning?{warnings:[warning]}:{})});
   const problems=files.filter(f=>f.state!=='ok');
   console.log(problems.length?'Обнаружены отсутствующие, изменённые или недоступные файлы: '+problems.length+'.':'Все файлы записанного набора на месте.');
   for(const p of observed)console.log(titles[p.name]+': '+(p.probe==='ok'?'инструкции '+(p.instructions==='loaded'?'подключаются':'не подтверждены')+', видно скиллов '+p.skills.length:'подключение проверить не удалось')+'.');
@@ -209,8 +225,12 @@ export async function main({owner=os.homedir(),afterInstall=false}={}){
   else console.log('Отправить отчёт не удалось. '+(basis==='local'?'Сравнение выполнено с сохранённым списком установки, не с актуальными данными платформы. ':''));
   if(saved)console.log('Файл проверки: '+saved);
   else console.log('Не удалось сохранить файл проверки.');
-  const loaderReady=observed.every(p=>p.probe==='ok'&&p.instructions==='loaded'&&p.skills.length===Object.keys(manifest.files).filter(f=>f.startsWith(p.name+'/skills/')&&f.endsWith('/SKILL.md')).length);
-  const blocked=observed.some(p=>['cli','telegram'].some(platform=>p.toolAccess?.[platform]==='blocked'));
+  const {loaderReady,blocked}=checks;
+  if(compatibilityWarning) {
+    console.log(warning);
+    console.log('Установка продолжается. Подробности сохранены в отчёте проверки.');
+    return 0;
+  }
   if(afterInstall&&loaderReady&&!blocked&&preservedApplyWarnings(owner,manifest,files,rt?.home)) {
     console.log('Установка завершена. Нестандартные личные файлы сохранены; их состояние указано в отчёте проверки.');
     return 0;

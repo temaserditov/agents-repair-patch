@@ -338,7 +338,7 @@ class RepairTests(unittest.TestCase):
         with patch.dict(sys.modules,{'yaml':None,'hermes_yaml':stub}):
             f=self.fixture('Windows');self.assertTrue(f.run(True)['changed'])
     def test_vendor_and_generated_baselines_match_sources(self):
-        for name,source in {'student-skill-repairs.py':ROOT/'installer/packages/shared','designer-tools.py':ROOT/'installer/packages/shared','student-runtime.py':ROOT/'installer/packages/shared','security-tools.py':ROOT/'installer/packages/shared','agents-diagnose.mjs':ROOT/'apps/lms/installer-assets/diagnostics','profile-probe.py':ROOT/'apps/lms/installer-assets/diagnostics'}.items():
+        for name,source in {'sync-tariff-panel.py':ROOT/'installer/packages/shared','student-skill-repairs.py':ROOT/'installer/packages/shared','designer-tools.py':ROOT/'installer/packages/shared','student-runtime.py':ROOT/'installer/packages/shared','security-tools.py':ROOT/'installer/packages/shared','agents-diagnose.mjs':ROOT/'apps/lms/installer-assets/diagnostics','profile-probe.py':ROOT/'apps/lms/installer-assets/diagnostics'}.items():
             self.assertEqual((BUNDLE/'vendor'/name).read_bytes(),(source/name).read_bytes(),name)
         task=(BUNDLE/'ЗАДАНИЕ-ДЛЯ-CODEX.md').read_text()
         self.assertIn('автоматически перенесёт личные',task)
@@ -360,7 +360,7 @@ class RepairTests(unittest.TestCase):
             for name,digest in manifest['files'].items():self.assertEqual(repair.sha(archive.read(name)),digest)
     def test_verify_current_windows_exits_zero(self):
         f=self.fixture('Windows');f.run(True)
-        state=json.loads((f.control/'tariff-files.json').read_text());state['revision']='agents-release-20261105.2'
+        state=json.loads((f.control/'tariff-files.json').read_text());state['revision']='agents-release-20261105.3'
         write(f.control/'tariff-files.json',json.dumps(state))
         for name in repair.PACKAGE_HELPERS:write(f.control/'post-install'/name,'fixture')
         for name in ['carousel-style-brief','motion-brief-builder']:write(f.profiles/'designer/skills'/name/'SKILL.md','fixture')
@@ -369,6 +369,12 @@ class RepairTests(unittest.TestCase):
         before=tree(f.home);out=f.run(verify=True)
         self.assertEqual(out['exitCode'],0);self.assertEqual(out['nextStep'],'none');self.assertEqual(tree(f.home),before)
         self.assertTrue(any(x['code']=='panel-api' and x['status']=='skipped:panel-token-unavailable' for x in out['findings']))
+        write(f.install/'control/webshell-runtime.json','{"schema":2,"recoveryEnabled":true,"scheduledTasks":"deferred"}')
+        before=tree(f.home);out=f.run(verify=True)
+        self.assertEqual(out['exitCode'],0);self.assertEqual(out['nextStep'],'none');self.assertEqual(tree(f.home),before)
+        task=next(x for x in out['findings'] if x['code']=='windows-panel-task')
+        self.assertEqual(task['status'],'deferred');self.assertEqual(task['severity'],'warning')
+        self.assertFalse(any(x['status']=='needs-windows-v3' for x in out['findings']))
     def test_invalid_yaml_warning_without_exception_values(self):
         f=self.fixture('Windows');write(f.profiles/'designer/config.yaml','broken: [CANARY_UNCLOSED')
         report=self.root/'broken.json';stdout=io.StringIO()
@@ -536,6 +542,49 @@ class RepairTests(unittest.TestCase):
         config=types.ModuleType('hermes_cli.tools_config');config._get_platform_tools=lambda *args,**kwargs:['file','terminal','skills','web','code_execution','image_gen']
         with patch.dict(sys.modules,{'hermes_cli':parent,'hermes_cli.tools_config':config}):r.full_tools(True)
         self.assertEqual(r.findings[-1]['status'],'unchanged')
+    def test_mac_pending_restart_in_diagnose_and_verify(self):
+        for verify in [False,True]:
+            for codes in [[1,0,0],[1,1,1]]:
+                with self.subTest(verify=verify,codes=codes):
+                    f=self.fixture();marker=f.control/'web-shell-restart-pending';write(marker,'{}')
+                    write(f.home/'Library/LaunchAgents/com.infobiz.agents.web-shell.plist','fixture')
+                    r=repair.Repair(f.home,f.install,'Darwin',f.hermes,verify=verify)
+                    with patch.object(repair.platform,'system',return_value='Darwin'),patch.object(repair.subprocess,'run',side_effect=[subprocess.CompletedProcess([],c) for c in codes]):
+                        r.panel_restart()
+                    fixed=codes[-1]==0
+                    self.assertEqual(r.findings[-1]['status'],'fixed' if fixed else 'skipped:launchctl-unavailable')
+                    self.assertEqual(marker.exists(),not fixed)
+
+    def test_linux_pending_restart_in_diagnose_repair_and_verify(self):
+        for apply,verify in [(False,False),(True,False),(False,True)]:
+            for outcome in [0,1,FileNotFoundError(),subprocess.TimeoutExpired('systemctl',30)]:
+                with self.subTest(apply=apply,verify=verify,outcome=outcome):
+                    f=self.fixture();marker=f.control/'web-shell-restart-pending';write(marker,'original marker')
+                    r=repair.Repair(f.home,f.install,'Linux',f.hermes,apply=apply,verify=verify)
+                    kwargs={'side_effect':outcome} if isinstance(outcome,Exception) else {'return_value':subprocess.CompletedProcess([],outcome,'','')}
+                    with patch.object(repair.subprocess,'run',**kwargs) as run:
+                        r.panel_restart()
+                    self.assertEqual(run.call_args.args[0],['systemctl','restart','infobiz-web-shell.service'])
+                    self.assertEqual(run.call_args.kwargs['timeout'],30)
+                    fixed=outcome==0
+                    self.assertEqual(r.findings[-1]['status'],'fixed' if fixed else 'skipped:systemctl-unavailable')
+                    self.assertEqual(r.changed,fixed)
+                    self.assertEqual(marker.exists(),not fixed)
+                    if not fixed:self.assertEqual(marker.read_text(),'original marker')
+                    if fixed:
+                        with patch.object(repair.subprocess,'run') as repeat:
+                            r.panel_restart()
+                        repeat.assert_not_called()
+
+    def test_linux_pending_restart_ignores_missing_marker_and_preserves_link(self):
+        f=self.fixture();r=repair.Repair(f.home,f.install,'Linux',f.hermes,verify=True)
+        with patch.object(repair.subprocess,'run') as run:r.panel_restart()
+        run.assert_not_called();self.assertEqual(r.findings,[])
+        marker=f.control/'web-shell-restart-pending';target=f.home/'student.txt';write(target,'keep')
+        marker.symlink_to(target)
+        with patch.object(repair.subprocess,'run') as run,self.assertRaises(ValueError):r.panel_restart()
+        run.assert_not_called();self.assertEqual(target.read_text(),'keep')
+
     def test_gateway_path_includes_homebrew_and_honors_existing_plist(self):
         f=self.fixture();r=repair.Repair(f.home,f.install,'Darwin',f.hermes)
         self.assertIn('/opt/homebrew/bin',r.gateway_path())
@@ -660,7 +709,7 @@ class RepairTests(unittest.TestCase):
                     data=archive.extractfile(member).read();write(f.profiles/name,data);f.files[name]=repair.sha(data)
         for name in helpers:write(f.control/'post-install'/name,'fixture')
         r=repair.Repair(f.home,f.install,'Darwin',f.hermes);r.files=f.files;r.names=list(repair.NAMES)
-        for revision,expected in [('agents-native-content-20261103.1','needs-platform-update'),('agents-release-20261105.1','needs-platform-update'),('agents-release-20261105.2','unchanged')]:
+        for revision,expected in [('agents-native-content-20261103.1','needs-platform-update'),('agents-release-20261105.1','needs-platform-update'),('agents-release-20261105.2','needs-platform-update'),('agents-release-20261105.3','unchanged')]:
             r.state={'revision':revision};r.findings=[];before=tree(f.home);r.skills()
             findings={f['code']:f for f in r.findings}
             self.assertEqual(findings['managed-skills']['status'],expected)
@@ -698,7 +747,7 @@ class RepairTests(unittest.TestCase):
 
     def test_non_utf8_warning_alone_does_not_change_exit(self):
         f=self.fixture('Windows');f.run(True)
-        state=repair.json_file(f.control/'tariff-files.json');state['revision']='agents-release-20261105.2';write(f.control/'tariff-files.json',json.dumps(state))
+        state=repair.json_file(f.control/'tariff-files.json');state['revision']='agents-release-20261105.3';write(f.control/'tariff-files.json',json.dumps(state))
         for name in repair.PACKAGE_HELPERS:write(f.control/'post-install'/name,'fixture')
         write(f.install/'control/watchdog.js','fixture');write(f.install/'control/webshell-runtime.json','{"recoveryEnabled":true}')
         path=f.profiles/'tech/SOUL.md';path.write_bytes('Личный текст'.encode('cp1251'));before=tree(f.home)

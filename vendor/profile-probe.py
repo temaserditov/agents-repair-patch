@@ -9,6 +9,53 @@ import sys
 sys.dont_write_bytecode = True
 
 
+class UnsupportedSkillsAPI(Exception):
+    pass
+
+
+def observe_skills(home, requested, skills_tool):
+    find_skills = getattr(skills_tool, 'find_all_skills', None) or getattr(skills_tool, '_find_all_skills', None)
+    if not callable(find_skills):
+        raise UnsupportedSkillsAPI('Unsupported skill discovery API')
+    discovered = {item['name'] for item in find_skills()}
+    visible = []
+    reason = 'none'
+    # Resolve exact paths using the same roots as Hermes. A matching name alone
+    # cannot prove visibility when another skill shadows the course skill.
+    collect = getattr(skills_tool, '_collect_skill_candidates', None)
+    search_dirs = getattr(skills_tool, 'skill_search_dirs', None)
+    legacy_dirs = getattr(skills_tool, '_skill_search_dirs', None)
+    parse = getattr(skills_tool, '_parse_frontmatter', None)
+    if not callable(parse):
+        try:
+            from agent.skill_utils import parse_frontmatter as parse
+        except ImportError:
+            parse = None
+    if not callable(collect) or not callable(parse) or not (callable(search_dirs) or callable(legacy_dirs)):
+        # Keep instruction/tool observations; skill visibility is unconfirmed.
+        reason = 'api-partial'
+    else:
+        if callable(search_dirs):
+            roots, _ = search_dirs()
+            all_dirs = [directory for _tier, directory in roots]
+        else:
+            _, all_dirs, _ = legacy_dirs()
+        for relative in requested:
+            file = home / 'profiles' / relative
+            if not file.is_file() or file.is_symlink():
+                continue
+            text = file.read_text(encoding='utf-8')
+            metadata, _ = parse(text[:4000])
+            name = metadata.get('name', file.parent.name)
+            if name not in discovered:
+                continue
+            candidates = collect(name, None, all_dirs)
+            paths = [entry[1].resolve() for entry in candidates]
+            if paths and all(path == file.resolve() for path in paths):
+                visible.append(relative)
+    return visible, reason
+
+
 def probe(request):
     home = Path(request['home'])
     profile = request['profile']
@@ -23,7 +70,6 @@ def probe(request):
     from hermes_constants import set_hermes_home_override
     set_hermes_home_override(str(directory))
     from agent.prompt_builder import build_context_files_prompt
-    from tools import skills_tool
     context = build_context_files_prompt(cwd=str(directory), home_override=directory)
     instructions = 'not-loaded'
     # Test real instruction text in the real loader's result, not a file's existence.
@@ -36,26 +82,14 @@ def probe(request):
                     instructions = 'loaded'
                 # Generic SOUL must not mask an omitted course AGENTS.md.
                 break
-    discovered = {item['name'] for item in skills_tool._find_all_skills()}
-    visible = []
-    # Use Hermes' own frontmatter parser and resolver. Same-name shadowing must
-    # not make a different skill appear as the promised course skill.
-    project_dirs, all_dirs, _ = skills_tool._skill_search_dirs()
-    for relative in request['skills']:
-        file = home / 'profiles' / relative
-        if not file.is_file() or file.is_symlink():
-            continue
-        text = file.read_text(encoding='utf-8')
-        metadata, _ = skills_tool._parse_frontmatter(text[:4000])
-        name = metadata.get('name', file.parent.name)
-        if name not in discovered:
-            continue
-        # API differs between reviewed Hermes builds. Unknown resolver shapes
-        # fail this observation instead of assuming that a matching name is enough.
-        candidates = skills_tool._collect_skill_candidates(name, None, all_dirs)
-        paths = [entry[1].resolve() for entry in candidates]
-        if paths and all(path == file.resolve() for path in paths):
-            visible.append(relative)
+    probe_state = 'ok'
+    try:
+        from tools import skills_tool
+        visible, reason = observe_skills(home, request['skills'], skills_tool)
+    except (UnsupportedSkillsAPI, AttributeError, TypeError):
+        visible, reason, probe_state = [], 'api-unsupported', 'failed'
+    except ImportError:
+        visible, reason, probe_state = [], 'module-missing', 'failed'
     gateway = 'unknown'
     tool_access = {key: 'unknown' for key in ('cli', 'telegram', 'web')}
     try:
@@ -94,7 +128,7 @@ def probe(request):
     except (ImportError, AttributeError, TypeError, OSError):
         pass
     return {'instructions': instructions, 'skills': visible, 'gateway': gateway, 'toolAccess': tool_access,
-            'runtimeContext': 'unverified', 'probe': 'ok', 'reason': 'none'}
+            'runtimeContext': 'unverified', 'probe': probe_state, 'reason': reason}
 
 
 if __name__ == '__main__':
@@ -108,7 +142,7 @@ if __name__ == '__main__':
         reason = ('module-missing' if isinstance(error, ImportError) else
                   'access-denied' if isinstance(error, PermissionError) else
                   'profile-missing' if isinstance(error, FileNotFoundError) else
-                  'api-unsupported' if isinstance(error, (AttributeError, TypeError)) else 'loader-failed')
+                  'api-unsupported' if isinstance(error, UnsupportedSkillsAPI) else 'loader-failed')
         result = {'instructions': 'unknown', 'skills': [], 'gateway': 'unknown',
                   'runtimeContext': 'unverified', 'probe': 'failed', 'reason': reason}
     print(json.dumps(result))

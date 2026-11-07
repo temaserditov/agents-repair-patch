@@ -1,20 +1,21 @@
 {
-  "commit": "a4483bfa21ad1b8cabea415f469c8ff864c67257",
+  "commit": "6cec1191166d3a3a56d5a8c613d1ec0d926bdce0",
   "files": {
-    "README.md": "d0607a39b1a2c40a7605be309eab6e4bdd78abaaff318c5afea8b412e74db4f0",
-    "agents_repair.py": "4f5c3a5b5d1991f22d898e1f107f20f4901be59e7aee670b2f886f6e3e2053a2",
-    "known-baselines.json": "b5a4219e704f903629399f0af3d4bd99fc303aa17e359e8bdb4bed298bbc18e4",
+    "README.md": "cba2bbfbfeee05500319ba1eeca1ede0033099f4b8e4d8a7d4da17fdaac6bc69",
+    "agents_repair.py": "1c9e5bde9fadf0bb32d5bf58b2bbc48de4af4934ea4358e92ec388716ccd7c76",
+    "known-baselines.json": "5968e457de58d02098d354ae2cecdfee43c77066ee0442093ba0bca6ae1e1197",
     "repair.ps1": "7b754be2488a45546261ed39706c2a224fab4acac751a88c1e18d34ba45f0e8d",
     "repair.sh": "7c34c48086f8520f77e6172fea4f0bd10ab82d8adb6672a3c39a23921e835cf7",
-    "tests/test_agents_repair.py": "0499aacb2cd950326a4a1b9f63d483334482092cc9ce0089e328583a89cfcdb6",
-    "vendor/agents-diagnose.mjs": "3d8d38f0c9a027a886d01829f34ef42d3a263ae7e0a89d8087bc0ea91bfff3bb",
+    "tests/test_agents_repair.py": "0454100ee13996113e00d3131203366d80e662406a99cf167ec58bac113ff0c3",
+    "vendor/agents-diagnose.mjs": "b7345b5e0b9a1d1688ca57cd310aa0f4d758e33e4c7654d03f513585ff3605eb",
     "vendor/designer-tools.py": "48a8f4b2de3714c30189a19e4de35242610f372c104e894b63abc6230c2f5f69",
-    "vendor/profile-probe.py": "459b0b1a0dff8c08b6e1c938402f3f6f21cb28c345bf5de9ae72c9a2e7ecf42a",
+    "vendor/profile-probe.py": "e3940cc39d2aecd02ee9cc36d22e2e4938d70dafb6da9bf38567d5417d100d2c",
     "vendor/security-tools.py": "bb6b6ce6b5223555e0d331a17a14a38380db3c52d30ac1e454f13d9642dbf90f",
     "vendor/student-runtime.py": "ab12b6e49d299262afb5203bc3c9632d9c8e1af48651e6c9932ea157b9121a80",
     "vendor/student-skill-repairs.py": "56e4e2a1b5cf7c4b4321d207b39e82a1412ae9b62c20d3b3c7e3b464d031c45c",
-    "ЗАДАНИЕ-ДЛЯ-CODEX.md": "6f86523e382078967305d6c37adeeec7bd7676feb51d120849155e4ac50b6d71"
+    "vendor/sync-tariff-panel.py": "e7132499511de0bd6e4a19f99b8746aba6e9e1da2c004015205a9d2b0ed72503",
+    "ЗАДАНИЕ-ДЛЯ-CODEX.md": "c1d2f3063dfd4a5e70c7a6117bad8062ab8951b952d78941ad637e75a1c80711"
   },
   "schemaVersion": 1,
-  "version": "v2026.11.05.2"
+  "version": "v2026.11.05.3"
 }

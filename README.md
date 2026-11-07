@@ -42,9 +42,11 @@ JSON сохраняется в `Downloads` с правами 0600 (на Windows 
 
 `--home ПАПКА` задаёт домашнюю папку владельца; `--install-root ПАПКА` — папку
 InfobizAgents; `--json ФАЙЛ` — место отчёта. `diagnose` и пробный `repair`
-не записывают в установку; создание JSON в «Загрузки» — единственное исключение.
+не записывают в установку, кроме описанного ниже повторного запуска панели; создание JSON в «Загрузки» — единственное исключение.
 Второй ремонт не меняет установку и сообщает `changed:false`; каждый запуск
-по-прежнему создаёт отдельный отчёт. `verify` ничего не ремонтирует.
+по-прежнему создаёт отдельный отчёт. `diagnose` и `verify` на Mac при наличии `web-shell-restart-pending` пробуют
+bootstrap/kickstart только панели. Успех снимает маркер (`fixed`), отказ оставляет
+его (`skipped:launchctl-unavailable`). Другие настройки эти команды не меняют.
 
 Коды завершения: 0 — проверенные настройки исправны (либо составлен план);
 3 — требуется штатное обновление / Windows v3; 2 — проверка или ремонт не выполнены;
@@ -59,10 +61,10 @@ InfobizAgents; `--json ФАЙЛ` — место отчёта. `diagnose` и пр
 передаётся системной службе через штатный протокол Hermes с проверкой стабильности.
 На Windows модели Content проверяются по SHA-256 блоками по 1 МБ, до 2 ГБ на файл.
 
-Состав: `agents_repair.py`, два лаунчера, `known-baselines.json`, шесть неизменённых
+Состав: `agents_repair.py`, два лаунчера, `known-baselines.json`, семь поставляемых
 помощников в `vendor/` (`designer-tools.py`, `student-runtime.py`, `security-tools.py`,
-`student-skill-repairs.py`, `agents-diagnose.mjs`, `profile-probe.py`), задание для
-Codex и изолированные тесты. В копии исходников — 73 теста (70 прежних и три новых):
+`student-skill-repairs.py`, `sync-tariff-panel.py`, `agents-diagnose.mjs`, `profile-probe.py`), задание для
+Codex и изолированные тесты. В копии исходников — 76 тестов:
 `npm run test:agents-repair-patch`. Сборка: `python3 -B installer/scripts/build-repair-patch.py
 --version v2026.11.05.1 --output /tmp/agents-repair-release`.
 
