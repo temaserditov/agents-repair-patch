@@ -45,6 +45,10 @@ def repair_tirith(home, log):
         if reason not in retryable:
             return report('skipped:non-retryable')
         os.environ['HERMES_HOME'] = str(home)
+        if not (home/'hermes-agent/tools/tirith_security.py').is_file() and (home/'hermes-agent/pm/lock.json').is_file():
+            # 0.23 removed Tirith, including its PM package. Keep the old
+            # marker as history; never replace its verifier with a download.
+            return report('skipped:upstream-removed')
         tirith = _load_tirith(home)
         if reason == 'unsupported_platform' and not tirith._detect_target():
             return report('skipped:unsupported_platform')

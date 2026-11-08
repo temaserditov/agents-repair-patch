@@ -1,0 +1,6 @@
+name: infobiz-team
+version: 1.0.0
+description: "Передача задач между профилями через штатный Kanban Hermes 0.23.0."
+author: Infobiz Agents
+kind: standalone
+platforms: [linux, macos, windows]

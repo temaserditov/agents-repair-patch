@@ -34,7 +34,12 @@ export function validateManifest(value){
     typeof value.revision!=='string'||!/^[a-zA-Z0-9.+-]{1,120}$/.test(value.revision)||![1,2,3].includes(value.tier)||!value.files||Array.isArray(value.files)||typeof value.files!=='object')throw new Error('Invalid manifest');
   const entries=Object.entries(value.files);
   if(!entries.length||entries.length>5000||entries.some(([name,digest])=>!validPath(name)||!value.profiles.includes(name.split('/')[0])||typeof digest!=='string'||! /^[a-f0-9]{64}$/.test(digest)))throw new Error('Invalid manifest');
+  if(value.textHashes!==undefined&&(!value.textHashes||Array.isArray(value.textHashes)||typeof value.textHashes!=='object'||
+    Object.entries(value.textHashes).some(([name,digest])=>!Object.hasOwn(value.files,name)||typeof digest!=='string'||!/^[a-f0-9]{64}$/.test(digest))))throw new Error('Invalid normalized text inventory');
   return value;
+}
+export function normalizedTextHash(data){
+  try{return sha(new TextDecoder('utf-8',{fatal:true}).decode(data).replace(/\r\n/g,'\n'));}catch{return null;}
 }
 export function observeFiles(home,manifest){
   return Object.entries(manifest.files).map(([relative,expected])=>{
@@ -45,7 +50,11 @@ export function observeFiles(home,manifest){
         const stat=fs.statSync(file);
         if(!stat.isFile())state='unreadable';
         else if(stat.size>8*1024*1024)state='oversized';
-        else state=sha(fs.readFileSync(file))===expected?'ok':'changed';
+        else {
+          const bytes=fs.readFileSync(file);
+          state=sha(bytes)===expected?'ok':'changed';
+          if(state==='changed'&&/\.(md|txt|yaml|yml|json|mjs|py)$/i.test(relative)&&normalizedTextHash(bytes)===(manifest.textHashes?.[relative]||expected))state='format-only';
+        }
       }
     }catch(error){state=error.code==='ENOENT'?'missing':'unreadable';}
     return {path:relative,state};
@@ -54,25 +63,27 @@ export function observeFiles(home,manifest){
 function run(program,args,options={}){
   return spawnSync(program,args,{encoding:'utf8',timeout:20000,maxBuffer:512*1024,windowsHide:true,...options});
 }
-function runtime(owner){
-  if(process.platform==='win32'){
-    const local=process.env.LOCALAPPDATA;
-    if(!local)throw new Error('Official Hermes not found');
-    const candidates=[path.join(local,'hermes/hermes-agent/.hermes/bin/hermes.exe'),path.join(local,'hermes/bin/hermes.exe')];
+export function runtime(owner,{platform=process.platform,env=process.env,execute=run}={}){
+  if(platform==='win32'){
+    const home=env.AG_DIAG_HERMES_HOME||env.HERMES_HOME;
+    const roots=[home,env.LOCALAPPDATA&&path.join(env.LOCALAPPDATA,'hermes')].filter(Boolean);
+    const candidates=roots.flatMap(root=>[path.join(root,'hermes-agent/.hermes/bin/hermes.exe'),path.join(root,'bin/hermes.exe')]);
     const launcher=candidates.find(p=>plain(p)&&fs.existsSync(p));
     if(!launcher)throw new Error('Official Hermes not found');
-    const result=run(launcher,['--print-runtime-command','--module','__serditov_addon__']);
+    const runtimeEnv={...env,...(home?{HERMES_HOME:home}:{})};
+    const result=execute(launcher,['--print-runtime-command','--module','__serditov_addon__'],{env:runtimeEnv});
     const command=JSON.parse(result.stdout);
     const suffix="runpy.run_module('__serditov_addon__', run_name='__main__', alter_sys=True)";
     if(result.status!==0||command.length!==4||command[1]!=='-I'||command[2]!=='-c'||!command[3].endsWith(suffix)||!path.isAbsolute(command[0])||!plain(command[0]))throw new Error('Unsupported runtime');
     // This is the official launcher's bootstrap, not user config or a PATH Python.
+    if(env.AG_DIAG_PYTHON&&path.resolve(env.AG_DIAG_PYTHON)!==path.resolve(command[0]))throw new Error('Runtime Python mismatch');
     const bootstrap=command[3].slice(0,-suffix.length);
-    const info=run(command[0],['-I','-B','-c',bootstrap+"from hermes_cli.profiles import get_profile_dir; import hermes_cli,json; from pathlib import Path; print(json.dumps({'home':str(get_profile_dir('default')),'source':str(Path(hermes_cli.__file__).resolve().parents[1])}))"]);
+    const info=execute(command[0],['-I','-B','-c',bootstrap+"from hermes_cli.profiles import get_profile_dir; import hermes_cli,json; from pathlib import Path; print(json.dumps({'home':str(get_profile_dir('marketer').parent.parent),'source':str(Path(hermes_cli.__file__).resolve().parents[1])}))"],{env:runtimeEnv});
     if(info.status!==0)throw new Error('Official runtime is not ready');
     const location=JSON.parse(info.stdout.trim().split('\n').at(-1));
     return {home:location.home,source:location.source,python:command[0],prefix:['-I','-B','-c'],bootstrap};
   }
-  const home=path.join(owner,'.hermes');
+  const home=env.AG_DIAG_HERMES_HOME||env.HERMES_HOME||path.join(owner,'.hermes');
   const python=path.join(home,'hermes-agent/venv/bin/python');
   // A venv interpreter is normally a symlink; the owned venv parent must be plain.
   if(!plain(path.dirname(python))||!fs.existsSync(python))throw new Error('Hermes runtime is missing');
@@ -163,7 +174,7 @@ export function preservedApplyWarnings(owner,manifest,files,home,{allowClean=fal
        !state.packageFiles||typeof state.revision!=='string'||
        (manifest.revision!=='local-record'&&state.revision!==manifest.revision)||
        !Object.entries(manifest.files).every(([n,h])=>h===(manifest.revision==='local-record'?state.files[n]:state.packageFiles[n])))return false;
-    const problems=files.filter(f=>f.state!=='ok');
+    const problems=files.filter(f=>!['ok','format-only'].includes(f.state));
     return (allowClean||problems.length>0)&&problems.every(f=>{
       if(apply.conflicts.includes(f.path))return ['changed','unreadable','linked','oversized'].includes(f.state);
       // An online manifest names package hashes; a completed merge has its own
@@ -204,7 +215,7 @@ export async function main({owner=os.homedir(),afterInstall=false}={}){
   const rtTools={};
   for(const name of tools){
     if(name==='python'){rtTools[name]=observed.some(p=>p.probe==='ok')?'available':'unknown';continue;}
-    const result=run(name==='node'?process.execPath:name,[name==='ffmpeg'||name==='ffprobe'?'-version':'--version'],{timeout:3000});
+    const result=run(name==='node'?(process.env.AG_DIAG_NODE||process.execPath):name,[name==='ffmpeg'||name==='ffprobe'?'-version':'--version'],{timeout:3000});
     rtTools[name]=result.status===0?'available':result.error?.code==='ENOENT'?'missing':'unknown';
   }
   const report={schemaVersion:1,reportId:crypto.randomUUID(),createdAt:new Date().toISOString(),target:process.platform==='darwin'?'mac':process.platform==='win32'?'windows':'vps',manifestSha256:sha(JSON.stringify(manifest)),files,profiles:observed,tools:rtTools};
@@ -214,7 +225,9 @@ export async function main({owner=os.homedir(),afterInstall=false}={}){
   const compatibilityWarning=afterInstall&&checks.compatibilityGap&&!checks.blocked&&preservedApplyWarnings(owner,manifest,files,rt?.home,{allowClean:true});
   const warning='Проверка загрузчика не поддерживает эту версию Hermes, инструкции не подтверждены.';
   const saved=saveReport(owner,{basis,manifest,report,...(compatibilityWarning?{warnings:[warning]}:{})});
-  const problems=files.filter(f=>f.state!=='ok');
+  const problems=files.filter(f=>!['ok','format-only'].includes(f.state));
+  const formatted=files.filter(f=>f.state==='format-only');
+  if(formatted.length)console.log('Изменён только формат UTF-8 BOM/CRLF, текст совпадает: '+formatted.length+'.');
   console.log(problems.length?'Обнаружены отсутствующие, изменённые или недоступные файлы: '+problems.length+'.':'Все файлы записанного набора на месте.');
   for(const p of observed)console.log(titles[p.name]+': '+(p.probe==='ok'?'инструкции '+(p.instructions==='loaded'?'подключаются':'не подтверждены')+', видно скиллов '+p.skills.length:'подключение проверить не удалось')+'.');
   for(const p of observed)if(Object.values(p.toolAccess||{}).includes('blocked'))console.log(titles[p.name]+': в настройках запрещены необходимые инструменты. Наличие скиллов на диске этого не исправляет.');

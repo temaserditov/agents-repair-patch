@@ -28,19 +28,25 @@
       "5ee341cd96fdb83ed916af4c640f4de586344c53ecca0b38b13a2a6dfc10fb9f": "updated-2026-11-05"
     },
     "server.mjs": {
-      "148a88a6906f527803d316884de47a9d29214e4542ed4830af21931dcce5f9d0": "updated-2026-11-05",
+      "11e18e9ebf78c6f8d744ae35973b6d921f6da0b43d189b7e3883c604fe2a5593": "accepted-predecessor",
+      "148a88a6906f527803d316884de47a9d29214e4542ed4830af21931dcce5f9d0": "accepted-predecessor",
       "159703016e7dc87d4a101a7f9e929ff1e7c70d0919f32dcb67ee4dd9c216a89b": "mac-installer-transform",
-      "26f3533321202c89c5c87e0e01ee0579d91cfac23ad8990ae7d11bafdd228f17": "accepted-predecessor",
+      "23f56c25619c0a7f755596d3d323485a9ebaa8b91e9d3acdba57037f7955da76": "accepted-predecessor",
       "36c956c10b65c9d95466c3c3ef05c43a5c1624cb0e4ab8f628b87e26ad40cf56": "accepted-predecessor",
+      "573c356ca2fcf9f9a528803ec1eba659e9b7336c465decf552abb835f82b89c9": "updated-2026-11-05",
       "658e1f7aebc8fd9a1f07f25ad84c4fccbf67072de56058debaf5cdeaa5d8c849": "accepted-predecessor",
-      "6acd72f9fddb8bd6bd6eff26189a62f6e04d9f16449dbdaeffe034c0e734fd7f": "accepted-predecessor",
+      "70bdee29fd0e1b69409fb91123df9526ac527335828c5d99096af9da83ecd38e": "accepted-predecessor",
+      "7becec2452203c3edde8102632605a9f4f48037ef2c31ece6925d34c7836bd01": "accepted-predecessor",
       "8e18dbb8c22f0e78582bc15ecfb68804885423d90f394253a30fc141fc7951c9": "original-0.3.0",
       "ac8bc765554010062c9bdf0ecf1bdc1856cbc15e13840d316298cbde2c70798d": "accepted-predecessor",
-      "c80f2e16dc7709d711abc1db43e3c3da01378a24b364837f133e34a9773969e9": "updated-2026-11-05",
-      "cb0295f51b4f9f2dfeb10b02bc71a37f41a5573f6d97a2eaba80ae47d66c6e04": "accepted-predecessor"
+      "c80f2e16dc7709d711abc1db43e3c3da01378a24b364837f133e34a9773969e9": "accepted-predecessor",
+      "cb0295f51b4f9f2dfeb10b02bc71a37f41a5573f6d97a2eaba80ae47d66c6e04": "accepted-predecessor",
+      "d945a70d64ade398099db65373eddb74e8347baa268155ac539f3eedb9889a17": "accepted-predecessor",
+      "e29af175950b6611143e50223809d91634ca0c9605ee10555ca199f593c75602": "accepted-predecessor",
+      "ec7d5ad738e6ef2a2a746c42ad50d745448f2d779ec70d413dd96f634a6d4877": "updated-2026-11-05"
     }
   },
-  "revision": "agents-release-20261105.3",
+  "revision": "agents-release-20261106.1",
   "schemaVersion": 1,
   "upstreamSoulHashes": [
     "2765a846e1bb371d78d3b93b403dfb0f8d1ba1a9895edb5f608367abfe81194d",

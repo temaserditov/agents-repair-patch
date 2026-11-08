@@ -1,21 +1,25 @@
 {
-  "commit": "6cec1191166d3a3a56d5a8c613d1ec0d926bdce0",
+  "commit": "3bd14a9bb6d78a217a14030d5a047160684e0a46",
   "files": {
-    "README.md": "cba2bbfbfeee05500319ba1eeca1ede0033099f4b8e4d8a7d4da17fdaac6bc69",
-    "agents_repair.py": "1c9e5bde9fadf0bb32d5bf58b2bbc48de4af4934ea4358e92ec388716ccd7c76",
-    "known-baselines.json": "5968e457de58d02098d354ae2cecdfee43c77066ee0442093ba0bca6ae1e1197",
+    "README.md": "9973dc25288d0216cd4f5effe89df772f06ff2113261fe99f8aa0b59643d1449",
+    "agents_repair.py": "1e4d4621f0422b2ea214f69a4b2906028f9880bf8b1ad27bbe49db7f13918e6c",
+    "known-baselines.json": "57d0485ba9a361b58e887345ea0e7ad8e4c3f7f4bd0acdb1315493a9ef911502",
     "repair.ps1": "7b754be2488a45546261ed39706c2a224fab4acac751a88c1e18d34ba45f0e8d",
     "repair.sh": "7c34c48086f8520f77e6172fea4f0bd10ab82d8adb6672a3c39a23921e835cf7",
-    "tests/test_agents_repair.py": "0454100ee13996113e00d3131203366d80e662406a99cf167ec58bac113ff0c3",
-    "vendor/agents-diagnose.mjs": "b7345b5e0b9a1d1688ca57cd310aa0f4d758e33e4c7654d03f513585ff3605eb",
+    "tests/test_agents_repair.py": "7d5bbae33975182e67dfbc8981c2fd6a7e72d738f5dadcf8174f09f87a9ac76b",
+    "tests/test_bundle_lists.py": "3d6e2932d33cda27ce2c991cc0a1a628e4a512f712891ee2a08523d1005c19ec",
+    "vendor/agents-diagnose.mjs": "fba85a57808178f0ce558dc7f776f9aa1c6328ca43395dc83083a8aa83689bce",
     "vendor/designer-tools.py": "48a8f4b2de3714c30189a19e4de35242610f372c104e894b63abc6230c2f5f69",
-    "vendor/profile-probe.py": "e3940cc39d2aecd02ee9cc36d22e2e4938d70dafb6da9bf38567d5417d100d2c",
-    "vendor/security-tools.py": "bb6b6ce6b5223555e0d331a17a14a38380db3c52d30ac1e454f13d9642dbf90f",
+    "vendor/plugins/infobiz-team/__init__.py": "90f4ee184925a2b4c0060e7e4b2c90854fdd409ccb0ede58c1774d6364b25d35",
+    "vendor/plugins/infobiz-team/plugin.yaml": "5360bc249b35fa7740001a092dfde06f4acbc03098fdf46c7204c9fd4a0ac319",
+    "vendor/profile-probe.py": "21bd0d0b3cec7eddde1747d6bd776c6ff688caa2fd8e006a0d20bf4e91ebb758",
+    "vendor/security-tools.py": "85f7ffc7141b615efa63f6611193bfab2e0fa2a031678bcd8ee62fd4a0b5a2ce",
     "vendor/student-runtime.py": "ab12b6e49d299262afb5203bc3c9632d9c8e1af48651e6c9932ea157b9121a80",
     "vendor/student-skill-repairs.py": "56e4e2a1b5cf7c4b4321d207b39e82a1412ae9b62c20d3b3c7e3b464d031c45c",
-    "vendor/sync-tariff-panel.py": "e7132499511de0bd6e4a19f99b8746aba6e9e1da2c004015205a9d2b0ed72503",
-    "ЗАДАНИЕ-ДЛЯ-CODEX.md": "c1d2f3063dfd4a5e70c7a6117bad8062ab8951b952d78941ad637e75a1c80711"
+    "vendor/sync-tariff-panel.py": "f81390ab08b46c42f99c164388cd1a1cd71c80444292820d80871bc6dfab37c3",
+    "vendor/team-runtime.py": "4d124d29144dab04ddd1b9b62b3e0505cfac08f023d3e74bd7b06cf6d3349308",
+    "ЗАДАНИЕ-ДЛЯ-CODEX.md": "b38a360b48bb1bcc039edaa068699cbd85c042c27ca51132c73d1b914b0bd32b"
   },
   "schemaVersion": 1,
-  "version": "v2026.11.05.3"
+  "version": "v2026.11.08.1"
 }

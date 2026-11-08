@@ -52,6 +52,10 @@ bootstrap/kickstart только панели. Успех снимает мар�
 3 — требуется штатное обновление / Windows v3; 2 — проверка или ремонт не выполнены;
 1 — внутренняя ошибка. Пропущенная проверка панели не подтверждает её исправность.
 Не объявляйте полный успех без разбора пропущенных проверок.
+Неподтверждённые команды команды (`team-tools:<профиль>` со статусом
+`pending:team-tools`) — предупреждение, а не код 2: настройки плагина применены,
+а живая проверка через gateway повторяется командой `verify` после его запуска.
+В `detail` такого предупреждения попадает короткий очищенный хвост вывода пробы.
 
 На Mac `verify` проверяет локальную панель и без токена; ответ 401/403 в этом
 случае отмечается как `skipped:panel-auth-required`. Личный SOUL без служебного
@@ -61,10 +65,11 @@ bootstrap/kickstart только панели. Успех снимает мар�
 передаётся системной службе через штатный протокол Hermes с проверкой стабильности.
 На Windows модели Content проверяются по SHA-256 блоками по 1 МБ, до 2 ГБ на файл.
 
-Состав: `agents_repair.py`, два лаунчера, `known-baselines.json`, семь поставляемых
+Состав: `agents_repair.py`, два лаунчера, `known-baselines.json`, восемь поставляемых
 помощников в `vendor/` (`designer-tools.py`, `student-runtime.py`, `security-tools.py`,
-`student-skill-repairs.py`, `sync-tariff-panel.py`, `agents-diagnose.mjs`, `profile-probe.py`), задание для
-Codex и изолированные тесты. В копии исходников — 76 тестов:
+`student-skill-repairs.py`, `sync-tariff-panel.py`, `team-runtime.py` с `plugins/infobiz-team/`,
+`agents-diagnose.mjs`, `profile-probe.py`), задание для
+Codex и изолированные тесты. В копии исходников — 81 тест:
 `npm run test:agents-repair-patch`. Сборка: `python3 -B installer/scripts/build-repair-patch.py
 --version v2026.11.05.1 --output /tmp/agents-repair-release`.
 

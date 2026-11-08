@@ -47,6 +47,33 @@ KANBAN = re.compile(r'(?m)^# Infobiz Agents multi-gateway defaults\nkanban:[ \t]
 PATH_ROOTS = ContextVar('repair_path_roots', default=(HERE,))
 
 
+def known_reasons():
+    """The patch's own literal messages (this file and the vendored helpers):
+    fixed English text with no learner data, so a report may repeat them."""
+    reasons = set()
+    for path in [Path(__file__), *sorted((HERE/'vendor').glob('*.py'))]:
+        try:
+            reasons.update(re.findall(r"raise \w+Error\('([^']+)'\)", path.read_text(encoding='utf-8')))
+        except OSError:
+            pass
+    return reasons
+
+
+def failure_summary(error):
+    """``Type: reason`` for a report. The reason is repeated only when it is one
+    of the patch's own literal messages (e.g. a missing bundled helper) or an
+    OS error name without its path; any other exception text may hold paths,
+    config values or credentials and stays out of the report (the opt-in CI
+    debug file keeps the full traceback)."""
+    name = type(error).__name__
+    message = ' '.join(str(error).split())
+    if message and message in known_reasons():
+        return name+': '+message
+    if isinstance(error, OSError) and error.strerror:
+        return name+': '+' '.join(str(error.strerror).split())[:120]
+    return name
+
+
 def debug_exception(stage):
     # Opt-in CI evidence only. Never include exception text in normal findings.
     target = os.environ.get('AGENTS_REPAIR_DEBUG_FILE')
@@ -61,6 +88,14 @@ def debug_exception(stage):
             stream.write('stage: '+stage+'\n'+traceback.format_exc()+'\n')
     except Exception:
         pass  # A diagnostic destination must never change the repair result.
+
+
+TEAM_TOOLS_PENDING = {
+    'pending-gateway-reload': 'gateway не запущен или этот Hermes не умеет перезагружать плагины без перезапуска.',
+    'missing-gateway-plugin': 'запущенный gateway ещё не загрузил плагин infobiz-team; перезапусти gateway.',
+    'missing-tools': 'плагин infobiz-team не зарегистрировал команды в этом Hermes; нужно штатное обновление.',
+    'unavailable-runtime': 'проба Hermes в отдельном процессе не завершилась.',
+}
 
 
 def load(name):
@@ -201,12 +236,29 @@ def kanban_text(text):
     return KANBAN.sub(lambda m: 'kanban:\n' if re.match(r'(?:[ \t]*\n)*[ \t]+\S', text[m.end():]) else 'kanban: {}\n', text)
 
 
+def gateway_launch_supervisor(identity):
+    """Use the pinned protocol reader; legacy Hermes exposes only supervisor."""
+    try:
+        from gateway.control_socket import launch_supervisor
+    except ImportError:
+        # Old snapshots lack the helper. "none" without launch metadata is
+        # ambiguous and must never authorize draining a process.
+        for key in ('launch_supervisor', 'supervisor'):
+            value = identity.get(key)
+            if isinstance(value, str) and value and value != 'none':
+                return value
+        return None
+    return launch_supervisor(identity)
+
+
+
 class Repair:
     def __init__(self, home, install=None, system=None, hermes=None, apply=False, verify=False, wait=0):
         self.home = Path(home).absolute()
         self.install = Path(install).absolute() if install else self.home/'InfobizAgents'
         self.system = system or platform.system()
-        self.hermes = Path(hermes or os.environ.get('AGENTS_REPAIR_HERMES_HOME') or self.home/'.hermes').absolute()
+        default_hermes = Path(os.environ.get('LOCALAPPDATA') or self.home/'AppData/Local')/'hermes' if self.system=='Windows' else self.home/'.hermes'
+        self.hermes = Path(hermes or os.environ.get('AGENTS_REPAIR_HERMES_HOME') or os.environ.get('HERMES_HOME') or default_hermes).absolute()
         self.profiles = self.hermes/'profiles'
         self.control = self.install/'control/tariffs'
         self.apply = apply
@@ -453,6 +505,117 @@ class Repair:
             self.files[name+'/SOUL.md'] = sha(incoming)
         self.mutation('soul:'+name, 'Восстановить SOUL из проверенного локального пакета.', write)
 
+    def team(self):
+        helper = load('team-runtime')
+        package = HERE/'vendor'
+        enabled = []
+        for name in self.names:
+            if self.profiles/name/'config.yaml' in self.unreadable:
+                continue
+            reasons = helper.unconfigured_reasons(package, self.profiles, name)
+            if not reasons:
+                enabled.append(name)
+                continue
+            if self.verify:
+                # repair --apply enables this itself; verify names what is off
+                # (finite reason codes, no config values) instead of "unfixable".
+                self.add('team-config:'+name, 'pending:team-config',
+                         'Команда для Telegram не включена ('+', '.join(reasons)+'). Запусти repair --apply, затем повтори verify.', 'warning')
+                continue
+            def enable(name=name):
+                outcome = helper.configure(package, self.profiles, [name], self.control)
+                if outcome.get(name) == 'enabled':
+                    enabled.append(name)
+                else:
+                    self.add('team-plugin:'+name, 'unavailable:plugin-preserved',
+                             'Личный код или явный запрет плагина сохранён; проверь настройки профиля.', 'warning')
+            self.mutation('team-config:'+name, 'Включить infobiz-team и kanban для Telegram.', enable)
+        if not enabled:
+            return
+        if self.system == 'Windows':
+            self.windows_gateway_multiplex(enabled)
+        try:
+            source = self.hermes/'hermes-agent'
+            if not (source/'hermes_cli/__init__.py').is_file():
+                source = None
+            observed = helper.inspect_profiles(self.profiles, enabled, reload=self.apply, source=source)
+        except (ImportError, AttributeError, ValueError) as error:
+            observed = {name:{'status':'unavailable-runtime', 'detail':'probe failed: '+type(error).__name__} for name in enabled}
+        for name, answer in observed.items():
+            status = answer.get('status')
+            if status == 'ready':
+                self.add('team-tools:'+name, 'unchanged', 'Команды команды доступны в Telegram.', 'info')
+                continue
+            # The configuration is applied; only its live confirmation is missing.
+            # A stopped gateway, an old Hermes or a silent probe are not a
+            # support case: the learner reruns verify after the gateway starts.
+            reason = TEAM_TOOLS_PENDING.get(status, 'рантайм Hermes не ответил.')
+            detail = 'Инструменты Telegram не подтверждены ('+str(status)+'): '+reason+' Настройки применены; повтори verify после запуска gateway.'
+            if answer.get('detail'):
+                detail += ' Проба: '+str(answer['detail'])[:400]
+            self.add('team-tools:'+name, 'pending:team-tools', detail, 'warning')
+
+    def served_profiles(self):
+        """``served_profiles`` the official gateway recorded in the root's gateway_state.json
+        (Hermes 0.21.5 and 0.23 write it); None when no record or no key."""
+        path = self.hermes/'gateway_state.json'
+        try:
+            plain(path)
+            if not path.is_file():
+                return None
+            state = json.loads(path.read_text(encoding='utf-8-sig'))
+            served = state.get('served_profiles') if isinstance(state, dict) else None
+            return [str(s) for s in served] if isinstance(served, list) else None
+        except (OSError, ValueError, UnicodeError):
+            return None
+
+    def windows_gateway_multiplex(self, names):
+        """One multiplexed gateway must serve every course profile, as the Mac/VPS
+        installers configure with ``gateway migrate --multiplex``. Windows never ran
+        it, so the root gateway answered "home is not served by this gateway" and the
+        team plugin never went live for Telegram. Apply runs the official migration
+        through the launcher; verify reports the gap as pending."""
+        served = self.served_profiles()
+        if served is None:
+            return  # no gateway record: the probe below reports the live answer
+        missing = sorted(set(names)-set(served))
+        if not missing:
+            self.add('windows-gateway-multiplex', 'unchanged', 'Единый gateway обслуживает профили: '+', '.join(sorted(served))+'.', 'info')
+            return
+        launcher = self.hermes/'bin/hermes.exe'
+        plain(launcher)
+        detail = 'Gateway не обслуживает профили: '+', '.join(missing)+'.'
+        if not self.apply:
+            self.add('windows-gateway-multiplex', 'planned' if not self.verify else 'pending:gateway-multiplex',
+                     detail+' Нужна штатная миграция gateway migrate --multiplex; её выполняет repair --apply.', 'warning')
+            return
+        if not launcher.is_file():
+            self.add('windows-gateway-multiplex', 'unavailable:launcher-missing', detail+' Официальный лаунчер Hermes не найден.', 'warning')
+            return
+        self.changed = True
+        migrate = command([str(launcher), 'gateway', 'migrate', '--multiplex', '--yes'], 300)
+        if migrate.returncode != 0:
+            self.add('windows-gateway-multiplex', 'unavailable:migration-failed',
+                     detail+' Миграция завершилась с кодом '+str(migrate.returncode)+'; перезапусти gateway и повтори verify.', 'warning')
+            return
+        # The migration brings the multiplexer up itself; an installed task that
+        # was stopped is started the official way.
+        for _ in range(30):
+            served = self.served_profiles() or []
+            if not set(names)-set(served):
+                self.add('windows-gateway-multiplex', 'fixed', 'Единый gateway обслуживает профили: '+', '.join(sorted(served))+'.', 'info')
+                return
+            time.sleep(1)
+        command([str(launcher), 'gateway', 'start'], 180)
+        for _ in range(30):
+            served = self.served_profiles() or []
+            if not set(names)-set(served):
+                self.add('windows-gateway-multiplex', 'fixed', 'Единый gateway обслуживает профили: '+', '.join(sorted(served))+'.', 'info')
+                return
+            time.sleep(1)
+        self.add('windows-gateway-multiplex', 'pending:gateway-multiplex',
+                 'Миграция выполнена, но gateway ещё не подтвердил профили: '+', '.join(sorted(set(names)-set(served)))+'. Повтори verify после запуска gateway.', 'warning')
+
     def skills(self):
         owner_files = 0
         stale_content = 0
@@ -478,7 +641,7 @@ class Repair:
                 plain(path)
                 missing += not path.is_file()
         old = self.state.get('revision')!=self.baselines['revision']
-        self.add('package-revision', self.update() if old else 'unchanged', 'Нужна новая ревизия пакета.' if old else 'Ревизия 5 ноября установлена.', 'warning' if old else 'info')
+        self.add('package-revision', self.update() if old else 'unchanged', 'Нужна новая ревизия пакета.' if old else 'Актуальная ревизия пакета установлена.', 'warning' if old else 'info')
         # Code examples may retain author references in the new release by design.
         self.add('managed-skills', self.update() if old else 'unchanged',
                  'Файлов с личными ссылками: %d; старым путём Content: %d; отсутствующих новых скиллов: %d. Файлы не изменялись.'%(owner_files, stale_content, missing))
@@ -752,12 +915,49 @@ class Repair:
         self.content_incomplete = self.tier==3 and not ready
         self.add('windows-content', 'needs-windows-v3' if self.content_incomplete else 'unchanged',
                  'Незавершённый Content: нужен второй блок инструкции (-ResumeContent).' if self.content_incomplete else 'Content не требуется или готов.')
-        deferred = v3 and config.get('scheduledTasks')=='deferred'
-        self.add('windows-panel-task', 'deferred' if deferred else 'skipped:v3-update' if not v3 else 'unchanged',
-                 'Задачи планировщика отложены: панель запущена как процесс до выхода из системы. Запусти runner.ps1 -RunControl из обычного Windows PowerShell или дай Codex полный доступ.' if deferred else 'Задачи не изменяются; восстановление устанавливает v3.',
-                 'warning' if deferred else 'info')
+        if v3:
+            self.windows_tasks(config)
+        else:
+            self.add('windows-panel-task', 'skipped:v3-update', 'Автозапуск проверяется после обновления до v3.')
         if self.verify:
             self.panel_api(v3)
+
+    def windows_tasks(self, config):
+        """Read the scheduler now; a receipt is not evidence after reboot."""
+        name = config.get('taskName', '')
+        help_text = "В обычном PowerShell выполни & ([scriptblock]::Create([IO.File]::ReadAllText((Join-Path $env:USERPROFILE 'InfobizAgents\\control\\runner.ps1')))) -InstallTasks, затем повтори verify."
+        try:
+            if not re.fullmatch(r'SerditovAgentsWebShell-[a-f0-9]{16}', name):
+                raise ValueError('Invalid task name')
+            # The installed official module determines its own root/profile name.
+            from hermes_cli.gateway_windows import get_task_name
+            prior = os.environ.get('HERMES_HOME')
+            try:
+                os.environ['HERMES_HOME'] = str(self.hermes)
+                gateway = get_task_name()
+            finally:
+                if prior is None: os.environ.pop('HERMES_HOME', None)
+                else: os.environ['HERMES_HOME'] = prior
+            if not re.fullmatch(r'Hermes_Gateway(?:_[a-zA-Z0-9_-]+)?', gateway):
+                raise ValueError('Invalid official task name')
+            names = [name, name.replace('WebShell-', 'Control-'), name.replace('WebShell-', 'Watchdog-'), gateway]
+            script = "$ErrorActionPreference='Stop'; @(" + ','.join("'"+n+"'" for n in names) + ")|ForEach-Object {$t=Get-ScheduledTask -TaskPath '\\' -TaskName $_ -ErrorAction SilentlyContinue;if($t){[pscustomobject]@{name=$_;state=[string]$t.State;enabled=[bool]$t.Settings.Enabled;available=[bool]$t.Settings.StartWhenAvailable;restart=[int]$t.Settings.RestartCount;interactive=([string]$t.Principal.LogonType -eq 'Interactive');delaySeconds=@($t.Triggers|Where-Object {$_.CimClass.CimClassName -eq 'MSFT_TaskLogonTrigger' -and $_.Enabled}|ForEach-Object {try{[Xml.XmlConvert]::ToTimeSpan([string]$_.Delay).TotalSeconds}catch{-1}});logon=[bool]@($t.Triggers|Where-Object {$_.CimClass.CimClassName -eq 'MSFT_TaskLogonTrigger' -and $_.Enabled}).Count}}else{[pscustomobject]@{name=$_;state='Missing'}}}|ConvertTo-Json -Compress"
+            result = command(['powershell.exe', '-NoProfile', '-NonInteractive', '-Command', script], 30)
+            rows = json.loads(result.stdout) if result.returncode == 0 else []
+            if not isinstance(rows, list): rows = [rows]
+            for task in names:
+                row = next((r for r in rows if isinstance(r, dict) and r.get('name') == task), {})
+                healthy = row.get('state') in {'Running', 'Ready', 'Queued'} and row.get('enabled') is True
+                if task != gateway:
+                    healthy = healthy and row.get('available') is True and row.get('interactive') is True
+                    expected_delay = 120 if 'WebShell-' in task else 90 if 'Control-' in task else 180
+                    healthy = healthy and expected_delay in (row.get('delaySeconds') or [])
+                    if 'Watchdog-' not in task:
+                        healthy = healthy and row.get('logon') is True and row.get('restart', 0) >= 3
+                code = 'windows-gateway-task' if task == gateway else 'windows-'+('panel' if 'WebShell-' in task else 'control' if 'Control-' in task else 'watchdog')+'-task'
+                self.add(code, 'unchanged' if healthy else 'needs-autostart', 'Задача включена; состояние '+row.get('state', 'Missing')+'.' if healthy else 'Задача удалена, отключена или не обеспечивает автозапуск. '+help_text, 'info' if healthy else 'warning')
+        except (ImportError, ValueError, OSError, AttributeError, TypeError):
+            self.add('windows-panel-task', 'unavailable:task-query', 'Планировщик или имя службы Hermes не удалось проверить. '+help_text, 'warning')
 
     def content_ready(self, portable):
         arm = platform.machine().lower() in {'arm64','aarch64'} or any(os.environ.get(k,'').upper()=='ARM64' for k in ['PROCESSOR_ARCHITEW6432','PROCESSOR_ARCHITECTURE'])
@@ -926,7 +1126,7 @@ class Repair:
 
     def linux_owned(self, props, identity):
         return (self.linux_identity_valid(identity) and identity['pid']==int(props.get('MainPID') or '0')
-                and identity.get('supervisor')!='manual' and props.get('ActiveState')=='active')
+                and gateway_launch_supervisor(identity)!='manual' and props.get('ActiveState')=='active')
 
     def linux_stable(self, identify, seconds):
         try:
@@ -968,7 +1168,7 @@ class Repair:
             else:
                 if identity['pid'] not in pids:
                     raise ValueError('Identity process unavailable')
-                handoff = (identity.get('supervisor')=='manual'
+                handoff = (gateway_launch_supervisor(identity)=='manual'
                            or str(identity['pid'])!=props.get('MainPID') or len(pids)>1)
             inactive = props.get('ActiveState')!='active'
             if handoff:
@@ -985,7 +1185,7 @@ class Repair:
                     identity = identify_gateway(self.hermes) or {}
                     remaining = self.linux_gateway_processes(identity)
                     if identity:
-                        if (not self.linux_identity_valid(identity) or identity.get('supervisor')!='manual'
+                        if (not self.linux_identity_valid(identity) or gateway_launch_supervisor(identity)!='manual'
                                 or identity['pid'] not in remaining):
                             raise ValueError('Owner changed')
                         # No signal escalation or retry: Hermes drains and exits.
@@ -1170,7 +1370,7 @@ class Repair:
         for name in self.names:
             self.stage = 'soul:'+name
             self.soul(name)
-        for stage in ['skills', 'logs', 'tirith', 'panel', 'speech']:
+        for stage in ['team', 'skills', 'logs', 'tirith', 'panel', 'speech']:
             self.stage = stage
             getattr(self, stage)()
         if self.system=='Linux':
@@ -1215,16 +1415,20 @@ def main(argv=None):
         result = repair.run()
     except (ValueError, OSError, UnicodeError) as error:
         debug_exception(getattr(locals().get('repair'), 'stage', 'initialization'))
-        result = {'schemaVersion':1,'changed':locals().get('repair') is not None and repair.changed,'findings':[{'code':'installation','severity':'error','status':'unfixable','detail':'Установка отсутствует, повреждена или путь небезопасен. Тип: '+type(error).__name__}], 'nextStep':'support','exitCode':2}
+        result = {'schemaVersion':1,'changed':locals().get('repair') is not None and repair.changed,'findings':[{'code':'installation','severity':'error','status':'unfixable','detail':'Установка отсутствует, повреждена или путь небезопасен. Причина: '+failure_summary(error)}], 'nextStep':'support','exitCode':2}
     except Exception as error:
         debug_exception(getattr(locals().get('repair'), 'stage', 'initialization'))
-        result = {'schemaVersion':1,'changed':locals().get('repair') is not None and repair.changed,'findings':[{'code':'internal','severity':'error','status':'unfixable','detail':'Проверка не завершена. Тип: '+type(error).__name__}], 'nextStep':'support','exitCode':1}
+        result = {'schemaVersion':1,'changed':locals().get('repair') is not None and repair.changed,'findings':[{'code':'internal','severity':'error','status':'unfixable','detail':'Проверка не завершена. Причина: '+failure_summary(error)}], 'nextStep':'support','exitCode':1}
     destination = args.json or args.home/'Downloads'/('Ремонт-агентов-'+datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')+'-'+uuid.uuid4().hex[:8]+'.json')
     try:
         destination = destination.absolute()
         # --json is a report destination, never permission to replace runtime
         # configuration, credentials or an installation's managed metadata.
         roots = [args.home/'.hermes', args.install_root or args.home/'InfobizAgents']
+        if locals().get('repair') is not None:
+            roots.append(repair.hermes)
+        if os.environ.get('HERMES_HOME'):
+            roots.append(Path(os.environ['HERMES_HOME']))
         if os.environ.get('AGENTS_REPAIR_HERMES_HOME'):
             roots.append(Path(os.environ['AGENTS_REPAIR_HERMES_HOME']))
         if destination.suffix.lower()!='.json' or any(p.lower() in PROTECTED or p.lower().startswith('.env') for p in destination.parts) or any(root.absolute()==destination or root.absolute() in destination.parents for root in roots):
@@ -1241,7 +1445,7 @@ def main(argv=None):
     if result['nextStep']=='none' and any(f['status']=='planned' for f in result['findings']):
         summary = 'План ремонта составлен; изменения не применялись.'
     print(summary)
-    print('JSON: '+str(destination) if saved else 'Не удалось сохранить JSON в Загрузки.')
+    print('JSON: '+str(destination)+'\nПришли этот файл в поддержку.' if saved else 'Не удалось сохранить JSON в Загрузки.')
     return result['exitCode']
 
 

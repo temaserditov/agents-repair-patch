@@ -82,9 +82,21 @@ def restart_panel(home,control):
             run(['launchctl','bootstrap',domain,str(plist)])
             ok=run(kick)
         reason='launchctl-failed'
-    elif system=='Linux' and Path('/etc/systemd/system/infobiz-web-shell.service').is_file():
-        ok=run(['systemctl','restart','infobiz-web-shell.service'])
-        reason='systemctl-failed'
+    elif system=='Linux':
+        try:
+            state=subprocess.run(['systemctl','show','-p','LoadState','--value','infobiz-web-shell.service'],
+                                 check=False,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,
+                                 text=True,timeout=30)
+            load=(state.stdout or '').strip()
+        except (OSError,subprocess.TimeoutExpired):
+            load=''
+        if load in {'masked','LoadState=masked'}:
+            ok=False;reason='systemctl-masked'
+        elif Path('/etc/systemd/system/infobiz-web-shell.service').is_file() or load in {'loaded','LoadState=loaded'}:
+            ok=run(['systemctl','restart','infobiz-web-shell.service'])
+            reason='systemctl-failed'
+        else:
+            return {'panel':'not-installed'}
     else:
         return {'panel':'not-installed'}
     if ok:

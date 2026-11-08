@@ -57,7 +57,7 @@ def observe_skills(home, requested, skills_tool):
 
 
 def probe(request):
-    home = Path(request['home'])
+    home = Path(request.get('home') or os.environ.get('AG_DIAG_HERMES_HOME') or os.environ.get('HERMES_HOME') or Path.home()/'.hermes')
     profile = request['profile']
     directory = home / 'profiles' / profile
     # A fresh process per profile: upstream global caches must not leak between bots.
@@ -93,7 +93,10 @@ def probe(request):
     gateway = 'unknown'
     tool_access = {key: 'unknown' for key in ('cli', 'telegram', 'web')}
     try:
-        import yaml
+        try:
+            import yaml
+        except ImportError:
+            import hermes_yaml as yaml
         from hermes_cli.tools_config import _get_platform_tools
         config_path = directory / 'config.yaml'
         config = yaml.safe_load(config_path.read_text()) if config_path.is_file() and not config_path.is_symlink() else {}

@@ -129,10 +129,95 @@ if s['active']:print('4321 1 '+os.environ['REPAIR_TEST_HOME']+'/.hermes/hermes-a
 class RepairTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(); self.root = Path(self.temp.name).resolve()
+        # These fixtures have no installed Hermes. Mock only its inspection
+        # subprocess; configuration/file repair still uses the real helper.
+        original_load = repair.load
+        def load_with_runtime(name):
+            helper = original_load(name)
+            if name == 'team-runtime':
+                helper.inspect_profiles = lambda profiles,names,**kw: {n:{'status':'ready'} for n in names}
+            return helper
+        self.runtime_patch = patch.object(repair,'load',side_effect=load_with_runtime)
+        self.runtime_patch.start()
     def tearDown(self):
+        self.runtime_patch.stop()
         self.temp.cleanup()
     def fixture(self, system='Darwin', tier=1):
         return Fixture(self.root,system,tier)
+    def test_team_repair_reload_and_verify_real_tools(self):
+        f=self.fixture('Windows');r=repair.Repair(f.home,f.install,'Windows',f.hermes,apply=True)
+        r.names=['copywriter'];r.unreadable=set()
+        helper=module('team_test',BUNDLE/'vendor/team-runtime.py')
+        with patch.object(repair,'load',return_value=helper),patch.object(helper,'inspect_profiles',return_value={'copywriter':{'status':'ready'}}) as inspect:
+            r.team()
+            self.assertTrue(r.changed)
+            self.assertTrue(inspect.call_args.kwargs['reload'])
+        r=repair.Repair(f.home,f.install,'Windows',f.hermes,verify=True);r.names=['copywriter'];r.unreadable=set()
+        before=tree(f.home)
+        with patch.object(repair,'load',return_value=helper),patch.object(helper,'inspect_profiles',return_value={'copywriter':{'status':'missing-tools'}}) as inspect:
+            r.team()
+            self.assertFalse(inspect.call_args.kwargs['reload'])
+        self.assertEqual(tree(f.home),before)
+        # TASK43: an unconfirmed team probe is a warning, never exit 2/support.
+        self.assertEqual(r.result()['exitCode'],0)
+        finding=next(x for x in r.findings if x['code']=='team-tools:copywriter')
+        self.assertEqual((finding['severity'],finding['status']),('warning','pending:team-tools'))
+        self.assertIn('missing-tools',finding['detail']);self.assertIn('повтори verify',finding['detail'])
+        for status,fragment in [('unavailable-runtime','exit 1: ModuleNotFoundError'),('pending-gateway-reload',''),('missing-gateway-plugin','')]:
+            r=repair.Repair(f.home,f.install,'Windows',f.hermes,apply=True);r.names=['copywriter'];r.unreadable=set()
+            with patch.object(repair,'load',return_value=helper),patch.object(helper,'inspect_profiles',return_value={'copywriter':{'status':status,'detail':fragment}}):
+                r.team()
+            finding=next(x for x in r.findings if x['code']=='team-tools:copywriter')
+            self.assertEqual((finding['severity'],finding['status'],r.result()['exitCode']),('warning','pending:team-tools',0),status)
+            self.assertIn(status,finding['detail'])
+            if fragment:self.assertIn(fragment,finding['detail'])
+        r=repair.Repair(f.home,f.install,'Windows',f.hermes,apply=True);r.names=['copywriter'];r.unreadable=set()
+        with patch.object(repair,'load',return_value=helper),patch.object(helper,'inspect_profiles',side_effect=ValueError('Linked team destination preserved')):
+            r.team()
+        finding=next(x for x in r.findings if x['code']=='team-tools:copywriter')
+        self.assertEqual((finding['severity'],finding['status'],r.result()['exitCode']),('warning','pending:team-tools',0))
+        self.assertNotIn('Linked team destination',finding['detail']);self.assertIn('ValueError',finding['detail'])
+
+    def test_windows_multiplex_migration_and_pending_team_config(self):
+        f=self.fixture('Windows');helper=module('team_multiplex',BUNDLE/'vendor/team-runtime.py')
+        write(f.hermes/'bin/hermes.exe',b'fixture-launcher');state=f.hermes/'gateway_state.json'
+        write(state,json.dumps({'served_profiles':['default']}))
+        calls=[]
+        def fake_command(args,timeout=30):
+            calls.append((args,timeout))
+            if args[1:3]==['gateway','migrate']:write(state,json.dumps({'served_profiles':['default','copywriter']}))
+            return subprocess.CompletedProcess(args,0,'','')
+        # verify: an unserved profile is pending, never exit 2
+        r=repair.Repair(f.home,f.install,'Windows',f.hermes,verify=True);r.names=['copywriter'];r.unreadable=set()
+        with patch.object(repair,'load',return_value=helper),patch.object(helper,'unconfigured_reasons',return_value=[]),patch.object(helper,'inspect_profiles',return_value={'copywriter':{'status':'ready'}}),patch.object(repair,'command',side_effect=fake_command):
+            r.team()
+        finding=next(x for x in r.findings if x['code']=='windows-gateway-multiplex')
+        self.assertEqual((finding['status'],finding['severity']),('pending:gateway-multiplex','warning'));self.assertIn('copywriter',finding['detail']);self.assertEqual(calls,[])
+        self.assertEqual(r.result()['exitCode'],0)
+        # apply: the official migration runs through the launcher before the probe
+        r=repair.Repair(f.home,f.install,'Windows',f.hermes,apply=True);r.names=['copywriter'];r.unreadable=set()
+        with patch.object(repair,'load',return_value=helper),patch.object(helper,'unconfigured_reasons',return_value=[]),patch.object(helper,'inspect_profiles',return_value={'copywriter':{'status':'ready'}}) as probe,patch.object(repair,'command',side_effect=fake_command),patch.object(repair.time,'sleep'):
+            r.team()
+        self.assertEqual(calls,[([str(f.hermes/'bin/hermes.exe'),'gateway','migrate','--multiplex','--yes'],300)])
+        finding=next(x for x in r.findings if x['code']=='windows-gateway-multiplex');self.assertEqual(finding['status'],'fixed');self.assertTrue(r.changed)
+        self.assertTrue(probe.called)
+        # already served: nothing to run; no record: nothing to say
+        r=repair.Repair(f.home,f.install,'Windows',f.hermes,apply=True);r.names=['copywriter'];r.unreadable=set();calls.clear()
+        with patch.object(repair,'load',return_value=helper),patch.object(helper,'unconfigured_reasons',return_value=[]),patch.object(helper,'inspect_profiles',return_value={'copywriter':{'status':'ready'}}),patch.object(repair,'command',side_effect=fake_command):
+            r.team()
+        self.assertEqual(calls,[]);self.assertEqual(next(x for x in r.findings if x['code']=='windows-gateway-multiplex')['status'],'unchanged')
+        state.unlink();r=repair.Repair(f.home,f.install,'Windows',f.hermes,apply=True);r.names=['copywriter'];r.unreadable=set()
+        with patch.object(repair,'load',return_value=helper),patch.object(helper,'unconfigured_reasons',return_value=[]),patch.object(helper,'inspect_profiles',return_value={'copywriter':{'status':'ready'}}),patch.object(repair,'command',side_effect=fake_command):
+            r.team()
+        self.assertFalse(any(x['code']=='windows-gateway-multiplex' for x in r.findings))
+        # verify on a profile whose team config is off: pending with reason codes, exit 0; apply still fixes it
+        r=repair.Repair(f.home,f.install,'Windows',f.hermes,verify=True);r.names=['copywriter'];r.unreadable=set()
+        with patch.object(repair,'load',return_value=helper),patch.object(helper,'unconfigured_reasons',return_value=['plugin-not-enabled','toolsets-kanban-missing']):
+            r.team()
+        finding=next(x for x in r.findings if x['code']=='team-config:copywriter')
+        self.assertEqual((finding['status'],finding['severity'],r.result()['exitCode']),('pending:team-config','warning',0))
+        self.assertIn('plugin-not-enabled, toolsets-kanban-missing',finding['detail']);self.assertIn('repair --apply',finding['detail'])
+
     def test_dry_run_all_layouts_writes_no_byte(self):
         for system in ['Darwin','Linux','Windows']:
             with self.subTest(system=system), tempfile.TemporaryDirectory() as tmp:
@@ -152,7 +237,11 @@ class RepairTests(unittest.TestCase):
                 self.assertFalse(again['changed']); self.assertEqual(before,tree(f.home))
                 for p,data in secrets.items(): self.assertEqual(p.read_bytes(),data)
                 cfg = yaml.safe_load((f.profiles/'designer/config.yaml').read_text())
+                # TASK43: the Designer inherits the Hermes cli/telegram bundles after the
+                # designer-tools repair; team activation must not pin them again. Kanban
+                # reaches inherited platforms through the profile-wide opt-in.
                 self.assertNotIn('cli',cfg['platform_toolsets']); self.assertNotIn('telegram',cfg['platform_toolsets'])
+                self.assertIn('kanban',cfg['toolsets'])
                 self.assertIn('code_execution',cfg['platform_toolsets']['web'])
                 for backend in ['groq','local']: self.assertEqual(cfg['stt'][backend]['language'],'ru')
                 self.assertNotIn(b'FIRST_CANARY',(f.install/'install.log').read_bytes())
@@ -174,6 +263,7 @@ class RepairTests(unittest.TestCase):
                 if disabled:data['agent'] = {'disabled_toolsets':['terminal']}
                 target.write_text(yaml.safe_dump(data))
                 out = f.run(True); cfg = yaml.safe_load(target.read_text())
+                # TASK43: a saved cli list is the learner's; team tools reach Telegram only.
                 self.assertEqual(cfg['platform_toolsets']['cli'],['web','file','my-tool'])
                 self.assertEqual(cfg['stt']['language'],'de'); self.assertEqual(cfg['stt']['groq']['language'],'uk')
                 self.assertEqual(cfg['stt']['local']['language'],'ru')
@@ -288,12 +378,29 @@ class RepairTests(unittest.TestCase):
         with patch.dict(os.environ,{'AGENTS_REPAIR_HERMES_HOME':str(f.hermes)}), patch.object(repair.platform,'system',return_value='Windows'), redirect_stdout(stdout):
             code = repair.main(['diagnose','--home',str(f.home),'--json',str(report),'--no-report'])
         self.assertEqual(code,3); self.assertEqual(report.stat().st_mode & 0o777,0o600)
+        self.assertIn('Пришли этот файл в поддержку.',stdout.getvalue())
         self.assertNotIn('CANARY',stdout.getvalue()); self.assertNotIn('FIRST_CANARY',report.read_text())
         with redirect_stdout(io.StringIO()):
             self.assertEqual(repair.main(['diagnose','--home',str(self.root/'absent'),'--json',str(report)]),2)
         with patch.object(repair.Repair,'run',side_effect=RuntimeError('SECRET_CANARY')),redirect_stdout(io.StringIO()):
             self.assertEqual(repair.main(['diagnose','--home',str(f.home),'--json',str(report)]),1)
         self.assertNotIn('SECRET_CANARY',report.read_text())
+        self.assertIn('Причина: RuntimeError',report.read_text())
+    def test_failure_summary_repeats_only_patch_literals(self):
+        self.assertEqual(repair.failure_summary(ValueError('Missing bundled helper')),'ValueError: Missing bundled helper')
+        self.assertEqual(repair.failure_summary(ValueError('Linked team destination preserved')),'ValueError: Linked team destination preserved')
+        self.assertEqual(repair.failure_summary(ValueError('token=SECRET_CANARY at /home/x/.env')),'ValueError')
+        self.assertEqual(repair.failure_summary(RuntimeError('SECRET_CANARY')),'RuntimeError')
+        self.assertEqual(repair.failure_summary(FileNotFoundError(2,'No such file or directory','/home/x/SECRET_CANARY.json')),'FileNotFoundError: No such file or directory')
+        self.assertEqual(repair.failure_summary(UnicodeDecodeError('utf-8',b'\xff',0,1,'invalid start byte')),'UnicodeDecodeError')
+    def test_diagnose_default_downloads_one_file_and_send_instruction(self):
+        f=self.fixture('Windows');stdout=io.StringIO()
+        with patch.dict(os.environ,{'AGENTS_REPAIR_HERMES_HOME':str(f.hermes)}),patch.object(repair.platform,'system',return_value='Windows'),redirect_stdout(stdout):
+            self.assertEqual(repair.main(['diagnose','--home',str(f.home),'--no-report']),3)
+        reports=list((f.home/'Downloads').glob('*.json'))
+        self.assertEqual(len(reports),1)
+        self.assertIn('findings',json.loads(reports[0].read_text()))
+        self.assertIn('Пришли этот файл в поддержку.',stdout.getvalue())
     def test_symlink_ancestors_and_protected_inventory_refused(self):
         f = self.fixture(); original = f.profiles/'designer'; renamed = f.profiles/'original'; original.rename(renamed); original.symlink_to(renamed,target_is_directory=True)
         before = tree(f.home)
@@ -360,7 +467,7 @@ class RepairTests(unittest.TestCase):
             for name,digest in manifest['files'].items():self.assertEqual(repair.sha(archive.read(name)),digest)
     def test_verify_current_windows_exits_zero(self):
         f=self.fixture('Windows');f.run(True)
-        state=json.loads((f.control/'tariff-files.json').read_text());state['revision']='agents-release-20261105.3'
+        state=json.loads((f.control/'tariff-files.json').read_text());state['revision']='agents-release-20261106.1'
         write(f.control/'tariff-files.json',json.dumps(state))
         for name in repair.PACKAGE_HELPERS:write(f.control/'post-install'/name,'fixture')
         for name in ['carousel-style-brief','motion-brief-builder']:write(f.profiles/'designer/skills'/name/'SKILL.md','fixture')
@@ -373,8 +480,37 @@ class RepairTests(unittest.TestCase):
         before=tree(f.home);out=f.run(verify=True)
         self.assertEqual(out['exitCode'],0);self.assertEqual(out['nextStep'],'none');self.assertEqual(tree(f.home),before)
         task=next(x for x in out['findings'] if x['code']=='windows-panel-task')
-        self.assertEqual(task['status'],'deferred');self.assertEqual(task['severity'],'warning')
+        self.assertEqual(task['status'],'unavailable:task-query');self.assertEqual(task['severity'],'warning')
         self.assertFalse(any(x['status']=='needs-windows-v3' for x in out['findings']))
+    def test_windows_tasks_check_live_scheduler_instead_of_receipt(self):
+        f=self.fixture('Windows')
+        task='SerditovAgentsWebShell-0123456789abcdef'
+        names=[task,task.replace('WebShell-','Control-'),task.replace('WebShell-','Watchdog-'),'Hermes_Gateway_test']
+        rows=[{'name':n,'state':'Ready','enabled':True,'available':True,'restart':3,'interactive':True,'logon':True,'delaySeconds':[120 if 'WebShell-' in n else 90 if 'Control-' in n else 180]} for n in names]
+        modules={'hermes_cli.gateway_windows':types.SimpleNamespace(get_task_name=lambda:'Hermes_Gateway_test')}
+        for defect in [None,'deleted','disabled','no-logon','no-restart','no-interactive','no-delay','watchdog-no-delay','gateway-disabled']:
+            current=json.loads(json.dumps(rows))
+            if defect=='deleted':current=current[1:]
+            if defect=='disabled':current[0]['state']='Disabled'
+            if defect=='no-delay':current[0]['delaySeconds']=[]
+            if defect=='watchdog-no-delay':current[2]['delaySeconds']=[]
+            if defect=='no-logon':current[0]['logon']=False
+            if defect=='no-restart':current[0]['restart']=0
+            if defect=='no-interactive':current[0]['interactive']=False
+            if defect=='gateway-disabled':current[-1]['enabled']=False
+            r=repair.Repair(f.home,f.install,'Windows',f.hermes,verify=True)
+            def query(args, timeout):
+                self.assertEqual(args[:3],['powershell.exe','-NoProfile','-NonInteractive'])
+                self.assertIn('Get-ScheduledTask',args[-1]);self.assertNotIn('Start-ScheduledTask',args[-1])
+                return subprocess.CompletedProcess(args,0,json.dumps(current),'')
+            with patch.dict(sys.modules,modules),patch.object(repair,'command',side_effect=query):
+                # Stale 'active'/'deferred' in JSON must never decide the result.
+                r.windows_tasks({'taskName':task,'scheduledTasks':'active' if defect else 'deferred'})
+            findings=r.findings
+            failed=[x for x in findings if x['status']!='unchanged']
+            self.assertEqual(bool(failed),defect is not None,findings)
+            if failed:self.assertIn('-InstallTasks',failed[0]['detail'])
+
     def test_invalid_yaml_warning_without_exception_values(self):
         f=self.fixture('Windows');write(f.profiles/'designer/config.yaml','broken: [CANARY_UNCLOSED')
         report=self.root/'broken.json';stdout=io.StringIO()
@@ -452,7 +588,10 @@ class RepairTests(unittest.TestCase):
         source=ast.parse((ROOT/'apps/lms/installer-assets/windows-addon-v3/overlay.py').read_text())
         fn=next(n for n in ast.walk(source) if isinstance(n,ast.FunctionDef) and n.name=='content_ready')
         expr=next(n.value for n in ast.walk(fn) if isinstance(n,ast.Assign) and getattr(n.targets[0],'id','')=='models')
-        self.assertEqual(repair.CONTENT_MODELS,{'arm64':ast.literal_eval(expr.body),'x64':ast.literal_eval(expr.orelse)})
+        factory=next(n for n in source.body if isinstance(n,ast.Assign) and getattr(n.targets[0],'id','')=='CONTENT_SPEECH_MODELS')
+        namespace={};exec(compile(ast.Module(body=[factory],type_ignores=[]),'overlay-models','exec'),namespace)
+        models=lambda arm:eval(compile(ast.Expression(expr),'overlay-readiness','eval'),{**namespace,'arm':arm})
+        self.assertEqual(repair.CONTENT_MODELS,{'arm64':models(True),'x64':models(False)})
     def test_content_readiness_large_models_streamed(self):
         f=self.fixture('Windows');r=repair.Repair(f.home,f.install,'Windows',f.hermes)
         portable=self.root/'portable'
@@ -612,6 +751,8 @@ class RepairTests(unittest.TestCase):
         qa=module('native_fixture_checks',ROOT/'installer/tests/native_release_checks.py')
         write(home/'repair/native_release_checks.py',(ROOT/'installer/tests/native_release_checks.py').read_bytes())
         write(home/'.hermes/config.yaml','{}')
+        write(home/'.hermes/hermes-agent/install-stamp.json',json.dumps({'commit':'2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19','baseVersion':'0.23.0'}))
+        write(home/'.hermes/hermes-agent/.infobiz-upstream-ref','release:v0.23.0\n')
         write(home/'.hermes/.env','HERMES_LOCAL_STT_COMMAND=synthetic-command\n')
         files={}
         for name,identity in qa.NAMES.items():
@@ -622,7 +763,7 @@ class RepairTests(unittest.TestCase):
             write(p/'SOUL.md','agents-profile-identity-v1 '+identity)
             write(p/'AGENTS.md','agents-profile-identity-v1 '+identity)
             files[name+'/SOUL.md']=repair.sha((p/'SOUL.md').read_bytes())
-        write(home/'InfobizAgents/control/tariffs/tariff-files.json',json.dumps({'files':files}))
+        write(home/'InfobizAgents/control/tariffs/tariff-files.json',json.dumps({'files':files,'revision':'agents-release-20261106.1'}))
         write(home/'InfobizAgents/install.log','fixture')
         return home
     def run_native_fixture(self,home,mode,*args):
@@ -709,7 +850,7 @@ class RepairTests(unittest.TestCase):
                     data=archive.extractfile(member).read();write(f.profiles/name,data);f.files[name]=repair.sha(data)
         for name in helpers:write(f.control/'post-install'/name,'fixture')
         r=repair.Repair(f.home,f.install,'Darwin',f.hermes);r.files=f.files;r.names=list(repair.NAMES)
-        for revision,expected in [('agents-native-content-20261103.1','needs-platform-update'),('agents-release-20261105.1','needs-platform-update'),('agents-release-20261105.2','needs-platform-update'),('agents-release-20261105.3','unchanged')]:
+        for revision,expected in [('agents-native-content-20261103.1','needs-platform-update'),('agents-release-20261105.1','needs-platform-update'),('agents-release-20261105.2','needs-platform-update'),('agents-release-20261105.3','needs-platform-update'),('agents-release-20261106.1','unchanged')]:
             r.state={'revision':revision};r.findings=[];before=tree(f.home);r.skills()
             findings={f['code']:f for f in r.findings}
             self.assertEqual(findings['managed-skills']['status'],expected)
@@ -747,7 +888,7 @@ class RepairTests(unittest.TestCase):
 
     def test_non_utf8_warning_alone_does_not_change_exit(self):
         f=self.fixture('Windows');f.run(True)
-        state=repair.json_file(f.control/'tariff-files.json');state['revision']='agents-release-20261105.3';write(f.control/'tariff-files.json',json.dumps(state))
+        state=repair.json_file(f.control/'tariff-files.json');state['revision']='agents-release-20261106.1';write(f.control/'tariff-files.json',json.dumps(state))
         for name in repair.PACKAGE_HELPERS:write(f.control/'post-install'/name,'fixture')
         write(f.install/'control/watchdog.js','fixture');write(f.install/'control/webshell-runtime.json','{"recoveryEnabled":true}')
         path=f.profiles/'tech/SOUL.md';path.write_bytes('Личный текст'.encode('cp1251'));before=tree(f.home)
@@ -1134,7 +1275,11 @@ for(const args of [
             output=io.StringIO()
             with patch.dict(os.environ,env),patch.object(repair.platform,'system',return_value='Windows'),redirect_stdout(output):
                 self.assertEqual(repair.main(['diagnose','--no-report','--home',str(f.home),'--json',str(report)]),2)
-            self.assertNotIn('Invalid managed inventory',output.getvalue()+report.read_text())
+            # TASK43: the patch's own literal reason names the failed check for
+            # support; the traceback itself still never reaches stdout or the report.
+            text=output.getvalue()+report.read_text()
+            self.assertIn('Причина: ValueError: Invalid managed inventory',text)
+            self.assertNotIn('Traceback',text);self.assertNotIn('File \"',text);self.assertNotIn('CANARY_BAD_PATH',text)
         trace=debug.read_text();self.assertGreaterEqual(trace.count('stage: package-inventory'),2)
         self.assertIn('Traceback (most recent call last)',trace);self.assertIn('ValueError: Invalid managed inventory',trace)
         with patch.dict(os.environ,{'AGENTS_REPAIR_DEBUG_FILE':'relative-debug.log'}):

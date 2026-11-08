@@ -1,10 +1,10 @@
 Это полное задание для Codex на моём компьютере/сервере, не просьба объяснить текст.
 Выполни работу до результата; лишних подтверждений не запрашивай.
 
-Пакет: https://github.com/temaserditov/agents-repair-patch/releases/download/v2026.11.05.3/agents-repair-patch-v2026.11.05.3.zip
+Пакет: https://github.com/temaserditov/agents-repair-patch/releases/download/v2026.11.08.1/agents-repair-patch-v2026.11.08.1.zip
 SHA-256 ZIP: {{ZIP_SHA256}}
-Исходники: https://github.com/temaserditov/agents-repair-patch/tree/v2026.11.05.3
-Версия: v2026.11.05.3. Commit: 6cec1191166d3a3a56d5a8c613d1ec0d926bdce0.
+Исходники: https://github.com/temaserditov/agents-repair-patch/tree/v2026.11.08.1
+Версия: v2026.11.08.1. Commit: 3bd14a9bb6d78a217a14030d5a047160684e0a46.
 Не скачивай другие версии, не меняй SHA. Если остались незаполненные поля,
 остановись: опубликованный пакет ещё не указан.
 
