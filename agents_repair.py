@@ -999,9 +999,19 @@ class Repair:
         # Use the gateway's installed PATH, not Codex's extra developer paths.
         gateway_path = self.gateway_path()
         tools = {}
+        outside = {}
         for name in ['ffmpeg','ffprobe']:
             binary = shutil.which(name, path=gateway_path)
+            if not binary:
+                # FIX_0558: an installed program outside the gateway PATH (Homebrew,
+                # /usr/local, our tools) is not "missing"; it is a PATH gap.
+                located = self.locate_media_tool(name)
+                if located:
+                    outside[name] = located
+                    binary = located
             tools[name] = bool(binary and command([binary, '-version'], 10).returncode==0)
+        if outside:
+            self.media_path(outside, gateway_path)
         providers = []
         for name in self.names:
             text = self.text(self.profiles/name/'config.yaml', 'configuration:'+name)
@@ -1017,6 +1027,127 @@ class Repair:
         if self.system=='Darwin':
             self.mac_media(tools, gateway_path)
             self.add('mac-homebrew', 'skipped:information' if platform.machine() in {'x86_64','amd64'} and not shutil.which('brew') else 'unchanged', 'Homebrew не устанавливается этим патчем.')
+
+    MEDIA_TOOL_DIRS = ('/opt/homebrew/bin', '/usr/local/bin')
+
+    def locate_media_tool(self, name):
+        """A working ``ffmpeg``/``ffprobe`` in a known course or package-manager
+        directory that the gateway PATH does not include; None otherwise."""
+        candidates = [self.home/'.local/bin', self.install/'shims', self.install/'tools/ffmpeg/bin']+[Path(d) for d in self.MEDIA_TOOL_DIRS]
+        for directory in candidates:
+            binary = directory/name
+            try:
+                if not binary.is_file() or not os.access(binary, os.X_OK):
+                    continue
+                plain(binary)
+            except (OSError, ValueError):
+                continue
+            if command([str(binary), '-version'], 10).returncode==0:
+                return str(binary)
+        return None
+
+    def media_path(self, outside, gateway_path):
+        """FIX_0558: name the found program and the gateway PATH gap instead of a
+        false "missing"; apply links it into ~/.local/bin when the gateway sees that
+        directory, otherwise the exact PATH change is reported."""
+        local = self.home/'.local/bin'
+        visible = str(local) in gateway_path.split(os.pathsep)
+        found = ', '.join(name+': '+path for name, path in sorted(outside.items()))
+        if not visible:
+            self.add('media-path', 'needs-platform-update', 'Медиапрограммы найдены ('+found+'), но ни их каталог, ни ~/.local/bin не входят в PATH gateway. Добавь каталог в PATH службы gateway или запусти обновление платформы.', 'warning')
+            return
+        if not self.apply or self.verify:
+            self.add('media-path', 'planned' if not self.verify else 'pending:media-path', 'Медиапрограммы найдены ('+found+'), но каталог не в PATH gateway; repair --apply создаст ссылки в ~/.local/bin.', 'warning')
+            return
+        linked = []
+        try:
+            local.mkdir(parents=True, exist_ok=True)
+            for name, path in sorted(outside.items()):
+                target = local/name
+                plain(target.parent)
+                if target.exists() or target.is_symlink():
+                    continue
+                target.symlink_to(path)
+                linked.append(name)
+            self.changed = self.changed or bool(linked)
+            self.add('media-path', 'fixed' if linked else 'unchanged', 'Ссылки в ~/.local/bin: '+(', '.join(linked) or 'уже существуют')+'; найдено: '+found+'.')
+        except OSError:
+            debug_exception(self.stage+':media_path')
+            self.add('media-path', 'unavailable:media-link-failed', 'Ссылку в ~/.local/bin создать не удалось; найдено: '+found+'.', 'warning')
+
+    def gateway_identity(self):
+        """The installed Hermes' own ``identify`` answer for this home, or None."""
+        source = str(self.hermes/'hermes-agent')
+        if source not in sys.path:
+            sys.path.insert(0, source)
+        try:
+            from gateway.control_socket import identify_gateway
+            answer = identify_gateway(self.hermes)
+            return answer if isinstance(answer, dict) else None
+        except Exception:
+            debug_exception(self.stage+':gateway_identity')
+            return None
+
+    def process_started_at(self, pid):
+        """Process start as a UNIX timestamp from ``ps -o etime`` (Mac/Linux); None if unknown."""
+        result = command(['ps', '-o', 'etime=', '-p', str(pid)], 10)
+        text = result.stdout.strip() if result.returncode==0 else ''
+        match = re.fullmatch(r'(?:(?:(\d+)-)?(\d+):)?(\d+):(\d+)', text)
+        if not match:
+            return None
+        days, hours, minutes, seconds = (int(v) if v else 0 for v in match.groups())
+        return time.time()-(((days*24+hours)*60+minutes)*60+seconds)
+
+    def gateway_runtime(self):
+        """FIX_0558: a gateway process that started before the Hermes files on disk
+        were last replaced still runs the previous code (Hermes 0.22.7 on disk vs a
+        0.23.0 process, or the reverse). Verify names it; apply restarts through
+        the official ``hermes gateway restart``."""
+        if self.system not in {'Darwin','Linux'}:
+            return
+        stamp = self.hermes/'hermes-agent/install-stamp.json'
+        plain(stamp)
+        if not stamp.is_file():
+            return
+        identity = self.gateway_identity()
+        pid = identity.get('pid') if identity else None
+        if type(pid) is not int or pid<=0 or identity.get('hermes_home') not in (None, str(self.hermes)):
+            self.add('gateway-runtime', detail='Gateway этого Hermes не отвечает; сверка версии процесса с диском пропущена.')
+            return
+        started = self.process_started_at(pid)
+        if started is None:
+            self.add('gateway-runtime', detail='Время запуска gateway (pid %d) недоступно; сверка пропущена.'%pid)
+            return
+        try:
+            version = str((json.loads(read(stamp, 65536)) or {}).get('baseVersion') or 'unknown')
+        except (ValueError, OSError):
+            version = 'unknown'
+        replaced = stamp.stat().st_mtime
+        if started >= replaced-5:
+            self.add('gateway-runtime', detail='Gateway (pid %d) запущен после текущей установки Hermes %s на диске.'%(pid, version))
+            return
+        detail = 'Gateway (pid %d) запущен раньше, чем Hermes %s был обновлён на диске (%s): процесс выполняет прежний код.'%(pid, version, datetime.fromtimestamp(replaced, timezone.utc).strftime('%Y-%m-%d %H:%M UTC'))
+        launcher = self.hermes/'hermes-agent/venv/bin/hermes'
+        plain(launcher)
+        if not self.apply or self.verify:
+            self.add('gateway-runtime', 'planned' if not self.verify else 'pending:gateway-restart', detail+' Перезапусти gateway: hermes gateway restart (или repair --apply).', 'warning')
+            return
+        if not launcher.is_file():
+            self.add('gateway-runtime', 'unavailable:launcher-missing', detail+' Официальный лаунчер Hermes не найден.', 'warning')
+            return
+        self.changed = True
+        result = command([str(launcher), 'gateway', 'restart'], 300)
+        if result.returncode:
+            self.add('gateway-runtime', 'unavailable:restart-failed', detail+' hermes gateway restart завершился с кодом %d.'%result.returncode, 'warning')
+            return
+        for _ in range(30):
+            fresh = self.gateway_identity()
+            new_pid = fresh.get('pid') if fresh else None
+            if type(new_pid) is int and new_pid>0 and new_pid!=pid:
+                self.add('gateway-runtime', 'fixed', 'Gateway перезапущен штатно: новый процесс %d выполняет Hermes %s с диска.'%(new_pid, version))
+                return
+            time.sleep(1)
+        self.add('gateway-runtime', 'pending:gateway-restart', detail+' Перезапуск запрошен, новый процесс ещё не подтверждён; повтори verify через минуту.', 'warning')
 
     def mac_media(self, tools, gateway_path):
         if all(tools.values()):
@@ -1370,7 +1501,7 @@ class Repair:
         for name in self.names:
             self.stage = 'soul:'+name
             self.soul(name)
-        for stage in ['team', 'skills', 'logs', 'tirith', 'panel', 'speech']:
+        for stage in ['team', 'skills', 'logs', 'tirith', 'panel', 'speech', 'gateway_runtime']:
             self.stage = stage
             getattr(self, stage)()
         if self.system=='Linux':

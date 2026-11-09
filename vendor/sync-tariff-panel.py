@@ -79,8 +79,10 @@ def restart_panel(home,control):
         kick=['launchctl','kickstart','-k',domain+'/com.infobiz.agents.web-shell']
         ok=run(kick)
         if not ok:
-            run(['launchctl','bootstrap',domain,str(plist)])
-            ok=run(kick)
+            # FIX_0563: bootstrap already starts the RunAtLoad panel. kickstart -k
+            # right after it can kill the instance in launchd's spawn trampoline,
+            # and launchd then abandons a live process that keeps the port.
+            ok=run(['launchctl','bootstrap',domain,str(plist)]) or run(kick)
         reason='launchctl-failed'
     elif system=='Linux':
         try:

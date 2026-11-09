@@ -1,12 +1,12 @@
 {
-  "commit": "3bd14a9bb6d78a217a14030d5a047160684e0a46",
+  "commit": "e242603f51fb24be6b72c34e0644c45c0db95db6",
   "files": {
     "README.md": "9973dc25288d0216cd4f5effe89df772f06ff2113261fe99f8aa0b59643d1449",
-    "agents_repair.py": "1e4d4621f0422b2ea214f69a4b2906028f9880bf8b1ad27bbe49db7f13918e6c",
-    "known-baselines.json": "57d0485ba9a361b58e887345ea0e7ad8e4c3f7f4bd0acdb1315493a9ef911502",
+    "agents_repair.py": "810a5826ecae58de5b41cef8e434134d62ac814d7fc5122e4e2586bfa894c5ac",
+    "known-baselines.json": "1f564e11125350f0eb42b90a37d8de19048199d14fb748923fa1136389df3cd4",
     "repair.ps1": "7b754be2488a45546261ed39706c2a224fab4acac751a88c1e18d34ba45f0e8d",
     "repair.sh": "7c34c48086f8520f77e6172fea4f0bd10ab82d8adb6672a3c39a23921e835cf7",
-    "tests/test_agents_repair.py": "7d5bbae33975182e67dfbc8981c2fd6a7e72d738f5dadcf8174f09f87a9ac76b",
+    "tests/test_agents_repair.py": "1236e91b8d5a2a52601d52b33f86f57fb2ac0e641b322b26a18e5abe536b6b0e",
     "tests/test_bundle_lists.py": "3d6e2932d33cda27ce2c991cc0a1a628e4a512f712891ee2a08523d1005c19ec",
     "vendor/agents-diagnose.mjs": "fba85a57808178f0ce558dc7f776f9aa1c6328ca43395dc83083a8aa83689bce",
     "vendor/designer-tools.py": "48a8f4b2de3714c30189a19e4de35242610f372c104e894b63abc6230c2f5f69",
@@ -16,10 +16,10 @@
     "vendor/security-tools.py": "85f7ffc7141b615efa63f6611193bfab2e0fa2a031678bcd8ee62fd4a0b5a2ce",
     "vendor/student-runtime.py": "ab12b6e49d299262afb5203bc3c9632d9c8e1af48651e6c9932ea157b9121a80",
     "vendor/student-skill-repairs.py": "56e4e2a1b5cf7c4b4321d207b39e82a1412ae9b62c20d3b3c7e3b464d031c45c",
-    "vendor/sync-tariff-panel.py": "f81390ab08b46c42f99c164388cd1a1cd71c80444292820d80871bc6dfab37c3",
+    "vendor/sync-tariff-panel.py": "12284790a86e0025f0e46ed1dc2d429e184892f43c38300b54e71613e2a38764",
     "vendor/team-runtime.py": "4d124d29144dab04ddd1b9b62b3e0505cfac08f023d3e74bd7b06cf6d3349308",
-    "ЗАДАНИЕ-ДЛЯ-CODEX.md": "b38a360b48bb1bcc039edaa068699cbd85c042c27ca51132c73d1b914b0bd32b"
+    "ЗАДАНИЕ-ДЛЯ-CODEX.md": "ec2b40e4774397fd5469677dace55dda6273d79daadfbf2bc49748f856da3faf"
   },
   "schemaVersion": 1,
-  "version": "v2026.11.08.1"
+  "version": "v2026.11.09.1"
 }

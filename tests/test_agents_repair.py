@@ -467,7 +467,7 @@ class RepairTests(unittest.TestCase):
             for name,digest in manifest['files'].items():self.assertEqual(repair.sha(archive.read(name)),digest)
     def test_verify_current_windows_exits_zero(self):
         f=self.fixture('Windows');f.run(True)
-        state=json.loads((f.control/'tariff-files.json').read_text());state['revision']='agents-release-20261106.1'
+        state=json.loads((f.control/'tariff-files.json').read_text());state['revision']='agents-release-20261108.1'
         write(f.control/'tariff-files.json',json.dumps(state))
         for name in repair.PACKAGE_HELPERS:write(f.control/'post-install'/name,'fixture')
         for name in ['carousel-style-brief','motion-brief-builder']:write(f.profiles/'designer/skills'/name/'SKILL.md','fixture')
@@ -724,6 +724,76 @@ class RepairTests(unittest.TestCase):
         with patch.object(repair.subprocess,'run') as run,self.assertRaises(ValueError):r.panel_restart()
         run.assert_not_called();self.assertEqual(target.read_text(),'keep')
 
+    def test_media_outside_gateway_path_is_named_not_missing(self):
+        # FIX_0562: ffmpeg 9.x installed by Homebrew, gateway PATH without /opt/homebrew/bin.
+        f=self.fixture();write(f.home/'Library/LaunchAgents/ai.hermes.gateway.plist',repair.plistlib.dumps({'EnvironmentVariables':{'PATH':str(f.home/'.local/bin')+':/usr/bin:/bin'}}))
+        brew=self.root/'brew-bin';brew.mkdir();
+        for name in ['ffmpeg','ffprobe']:
+            target=brew/name;write(target,'#!/bin/sh\nexit 0\n');target.chmod(0o755)
+        calls=[]
+        def run(args,timeout=30):
+            calls.append(args);return subprocess.CompletedProcess(args,0,'','')
+        for verify,apply,status in [(True,False,'pending:media-path'),(False,False,'planned'),(False,True,'fixed')]:
+            with self.subTest(verify=verify,apply=apply):
+                r=repair.Repair(f.home,f.install,'Darwin',f.hermes,apply=apply,verify=verify);r.names=['copywriter'];r.tier=3;r.unreadable=set()
+                for name in ['ffmpeg','ffprobe']:
+                    link=f.home/'.local/bin'/name
+                    if link.is_symlink():link.unlink()
+                with patch.object(repair,'MEDIA_TOOL_DIRS',(str(brew),),create=True),patch.object(repair.Repair,'MEDIA_TOOL_DIRS',(str(brew),)),patch.object(repair,'command',side_effect=run),patch.object(repair.platform,'machine',return_value='arm64'):
+                    r.speech()
+                by={x['code']:x for x in r.findings}
+                self.assertEqual(by['media-path']['status'],status,by['media-path'])
+                self.assertIn(str(brew/'ffmpeg'),by['media-path']['detail'])
+                self.assertEqual(by['mac-ffmpeg']['status'],'unchanged','a found program is never a download case')
+                self.assertEqual(by['local-voice']['status'],'needs-platform-update','the STT command itself is still absent in the fixture')
+                self.assertEqual((f.home/'.local/bin/ffmpeg').is_symlink(),apply and not verify)
+                if apply and not verify:self.assertEqual(os.readlink(f.home/'.local/bin/ffmpeg'),str(brew/'ffmpeg'));self.assertTrue(r.changed)
+        # A gateway PATH without ~/.local/bin cannot be fixed by a link: the exact gap is reported.
+        write(f.home/'Library/LaunchAgents/ai.hermes.gateway.plist',repair.plistlib.dumps({'EnvironmentVariables':{'PATH':'/usr/bin:/bin'}}))
+        for name in ['ffmpeg','ffprobe']:
+            link=f.home/'.local/bin'/name
+            if link.is_symlink():link.unlink()
+        r=repair.Repair(f.home,f.install,'Darwin',f.hermes,apply=True);r.names=['copywriter'];r.tier=3;r.unreadable=set()
+        with patch.object(repair.Repair,'MEDIA_TOOL_DIRS',(str(brew),)),patch.object(repair,'command',side_effect=run):
+            r.speech()
+        by={x['code']:x for x in r.findings}
+        self.assertEqual(by['media-path']['status'],'needs-platform-update');self.assertIn('PATH gateway',by['media-path']['detail'])
+        self.assertFalse((f.home/'.local/bin/ffmpeg').exists());self.assertFalse(r.changed)
+
+    def test_gateway_runtime_predating_disk_update_is_restarted_officially(self):
+        # FIX_0562: Hermes files replaced on disk, the gateway still runs the earlier code.
+        f=self.fixture();stamp=f.hermes/'hermes-agent/install-stamp.json';write(stamp,json.dumps({'baseVersion':'0.23.0'}))
+        launcher=f.hermes/'hermes-agent/venv/bin/hermes';write(launcher,'#!/bin/sh\n');launcher.chmod(0o755)
+        identities=iter([{'pid':4242,'hermes_home':str(f.hermes)},{'pid':4242,'hermes_home':str(f.hermes)},{'pid':4343,'hermes_home':str(f.hermes)}])
+        calls=[]
+        def run(args,timeout=30):
+            calls.append(args)
+            if args[:2]==['ps','-o']:return subprocess.CompletedProcess(args,0,'   2-03:04:05\n','')
+            return subprocess.CompletedProcess(args,0,'','')
+        for verify,apply,status in [(True,False,'pending:gateway-restart'),(False,False,'planned')]:
+            with self.subTest(verify=verify,apply=apply):
+                r=repair.Repair(f.home,f.install,'Darwin',f.hermes,apply=apply,verify=verify)
+                with patch.object(repair.Repair,'gateway_identity',return_value={'pid':4242,'hermes_home':str(f.hermes)}),patch.object(repair,'command',side_effect=run):
+                    r.gateway_runtime()
+                self.assertEqual(r.findings[-1]['status'],status,r.findings[-1]);self.assertIn('pid 4242',r.findings[-1]['detail']);self.assertIn('0.23.0',r.findings[-1]['detail'])
+                self.assertFalse(any(a[1:3]==['gateway','restart'] for a in calls));self.assertFalse(r.changed)
+        r=repair.Repair(f.home,f.install,'Darwin',f.hermes,apply=True)
+        with patch.object(repair.Repair,'gateway_identity',side_effect=lambda self_=None:next(identities)),patch.object(repair,'command',side_effect=run),patch.object(repair.time,'sleep'):
+            r.gateway_runtime()
+        self.assertEqual(r.findings[-1]['status'],'fixed',r.findings[-1]);self.assertIn('4343',r.findings[-1]['detail'])
+        self.assertIn([str(launcher),'gateway','restart'],calls);self.assertTrue(r.changed)
+        # A process started after the files were written is current; no restart is proposed.
+        young=lambda args,timeout=30:subprocess.CompletedProcess(args,0,'00:03\n' if args[:2]==['ps','-o'] else '','')
+        r=repair.Repair(f.home,f.install,'Darwin',f.hermes,verify=True)
+        with patch.object(repair.Repair,'gateway_identity',return_value={'pid':4242,'hermes_home':str(f.hermes)}),patch.object(repair,'command',side_effect=young):
+            r.gateway_runtime()
+        self.assertEqual(r.findings[-1]['status'],'unchanged');self.assertIn('после текущей установки',r.findings[-1]['detail'])
+        # No answering gateway: the check is skipped without a false restart demand.
+        r=repair.Repair(f.home,f.install,'Darwin',f.hermes,verify=True)
+        with patch.object(repair.Repair,'gateway_identity',return_value=None),patch.object(repair,'command',side_effect=young):
+            r.gateway_runtime()
+        self.assertEqual(r.findings[-1]['status'],'unchanged');self.assertIn('не отвечает',r.findings[-1]['detail'])
+
     def test_gateway_path_includes_homebrew_and_honors_existing_plist(self):
         f=self.fixture();r=repair.Repair(f.home,f.install,'Darwin',f.hermes)
         self.assertIn('/opt/homebrew/bin',r.gateway_path())
@@ -763,7 +833,7 @@ class RepairTests(unittest.TestCase):
             write(p/'SOUL.md','agents-profile-identity-v1 '+identity)
             write(p/'AGENTS.md','agents-profile-identity-v1 '+identity)
             files[name+'/SOUL.md']=repair.sha((p/'SOUL.md').read_bytes())
-        write(home/'InfobizAgents/control/tariffs/tariff-files.json',json.dumps({'files':files,'revision':'agents-release-20261106.1'}))
+        write(home/'InfobizAgents/control/tariffs/tariff-files.json',json.dumps({'files':files,'revision':'agents-release-20261108.1'}))
         write(home/'InfobizAgents/install.log','fixture')
         return home
     def run_native_fixture(self,home,mode,*args):
@@ -850,7 +920,7 @@ class RepairTests(unittest.TestCase):
                     data=archive.extractfile(member).read();write(f.profiles/name,data);f.files[name]=repair.sha(data)
         for name in helpers:write(f.control/'post-install'/name,'fixture')
         r=repair.Repair(f.home,f.install,'Darwin',f.hermes);r.files=f.files;r.names=list(repair.NAMES)
-        for revision,expected in [('agents-native-content-20261103.1','needs-platform-update'),('agents-release-20261105.1','needs-platform-update'),('agents-release-20261105.2','needs-platform-update'),('agents-release-20261105.3','needs-platform-update'),('agents-release-20261106.1','unchanged')]:
+        for revision,expected in [('agents-native-content-20261103.1','needs-platform-update'),('agents-release-20261105.1','needs-platform-update'),('agents-release-20261105.2','needs-platform-update'),('agents-release-20261105.3','needs-platform-update'),('agents-release-20261106.1','needs-platform-update'),('agents-release-20261108.1','unchanged')]:
             r.state={'revision':revision};r.findings=[];before=tree(f.home);r.skills()
             findings={f['code']:f for f in r.findings}
             self.assertEqual(findings['managed-skills']['status'],expected)
@@ -888,7 +958,7 @@ class RepairTests(unittest.TestCase):
 
     def test_non_utf8_warning_alone_does_not_change_exit(self):
         f=self.fixture('Windows');f.run(True)
-        state=repair.json_file(f.control/'tariff-files.json');state['revision']='agents-release-20261106.1';write(f.control/'tariff-files.json',json.dumps(state))
+        state=repair.json_file(f.control/'tariff-files.json');state['revision']='agents-release-20261108.1';write(f.control/'tariff-files.json',json.dumps(state))
         for name in repair.PACKAGE_HELPERS:write(f.control/'post-install'/name,'fixture')
         write(f.install/'control/watchdog.js','fixture');write(f.install/'control/webshell-runtime.json','{"recoveryEnabled":true}')
         path=f.profiles/'tech/SOUL.md';path.write_bytes('Личный текст'.encode('cp1251'));before=tree(f.home)
