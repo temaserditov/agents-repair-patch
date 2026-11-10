@@ -1,25 +1,33 @@
 {
-  "commit": "e242603f51fb24be6b72c34e0644c45c0db95db6",
+  "commit": "56c5b57889e7ecca72794d07bab44cc19f99c654",
   "files": {
-    "README.md": "9973dc25288d0216cd4f5effe89df772f06ff2113261fe99f8aa0b59643d1449",
-    "agents_repair.py": "810a5826ecae58de5b41cef8e434134d62ac814d7fc5122e4e2586bfa894c5ac",
+    "README.md": "1a4adf1493ef375d125a777f79ddde82aae1931af7f4f22d30e0173b0d5849c6",
+    "agents_repair.py": "4853c4ca97efdbeabee8f085a2c8bd0af87d8ddb6838d4810e0c186d0008b7df",
     "known-baselines.json": "1f564e11125350f0eb42b90a37d8de19048199d14fb748923fa1136389df3cd4",
     "repair.ps1": "7b754be2488a45546261ed39706c2a224fab4acac751a88c1e18d34ba45f0e8d",
     "repair.sh": "7c34c48086f8520f77e6172fea4f0bd10ab82d8adb6672a3c39a23921e835cf7",
-    "tests/test_agents_repair.py": "1236e91b8d5a2a52601d52b33f86f57fb2ac0e641b322b26a18e5abe536b6b0e",
+    "tests/preflight_topics.test.mjs": "e58fec732027d48f7411fde28a56048e9829a89f0fb884d4dfff0fe69ee0804e",
+    "tests/test_agents_repair.py": "827a7f00afa9afd79bd7d5b29316a926fc9a15104ec0baebfffba719ab20b991",
     "tests/test_bundle_lists.py": "3d6e2932d33cda27ce2c991cc0a1a628e4a512f712891ee2a08523d1005c19ec",
-    "vendor/agents-diagnose.mjs": "fba85a57808178f0ce558dc7f776f9aa1c6328ca43395dc83083a8aa83689bce",
+    "tests/test_compat_repairs.py": "7eeb37676b31cbcf329e06c1963a8f7f557077949ba22ddb5ae97886c9e4cb04",
+    "tests/test_content_repairs.py": "63477c5e3189261fcf943a02f7fa6f64341c36201d8374d385e9f21fb916cb0b",
+    "tests/test_panel_repairs.py": "fbde9876fd6caaf303a9cc6fbb749959447fac80e00a39d378f67a3a3778109a",
+    "vendor/agents-diagnose.mjs": "b81d135c21667bad2acf0ab44cd67dbd10c130b2bd60411e1eae22afb3f5ce23",
+    "vendor/compat-repairs.py": "33555e6d60819c9a3e8c79b86ae2a524ee19d71fe32573b744c2050040e3e750",
+    "vendor/content-repairs.py": "e74a7b2b4cb9240c26cff191741108bff900b4683650f4f710302be7941ba6d0",
     "vendor/designer-tools.py": "48a8f4b2de3714c30189a19e4de35242610f372c104e894b63abc6230c2f5f69",
+    "vendor/panel-repairs.py": "d4214ade6feb75697f3531ec717f01fe9431bb2f9f2666061dfdc0086173f1fd",
     "vendor/plugins/infobiz-team/__init__.py": "90f4ee184925a2b4c0060e7e4b2c90854fdd409ccb0ede58c1774d6364b25d35",
     "vendor/plugins/infobiz-team/plugin.yaml": "5360bc249b35fa7740001a092dfde06f4acbc03098fdf46c7204c9fd4a0ac319",
+    "vendor/profile-context.py": "066bbcaef99ed6e53d1e47d7fd56eb644656c7b75bdd4cc47433c234596692c9",
     "vendor/profile-probe.py": "21bd0d0b3cec7eddde1747d6bd776c6ff688caa2fd8e006a0d20bf4e91ebb758",
     "vendor/security-tools.py": "85f7ffc7141b615efa63f6611193bfab2e0fa2a031678bcd8ee62fd4a0b5a2ce",
     "vendor/student-runtime.py": "ab12b6e49d299262afb5203bc3c9632d9c8e1af48651e6c9932ea157b9121a80",
     "vendor/student-skill-repairs.py": "56e4e2a1b5cf7c4b4321d207b39e82a1412ae9b62c20d3b3c7e3b464d031c45c",
     "vendor/sync-tariff-panel.py": "12284790a86e0025f0e46ed1dc2d429e184892f43c38300b54e71613e2a38764",
     "vendor/team-runtime.py": "4d124d29144dab04ddd1b9b62b3e0505cfac08f023d3e74bd7b06cf6d3349308",
-    "ЗАДАНИЕ-ДЛЯ-CODEX.md": "ec2b40e4774397fd5469677dace55dda6273d79daadfbf2bc49748f856da3faf"
+    "ЗАДАНИЕ-ДЛЯ-CODEX.md": "9e20f6c7859b917a28e7d552dd73841a2a5dfb2af30adaa5853912f270448638"
   },
   "schemaVersion": 1,
-  "version": "v2026.11.09.1"
+  "version": "v2026.11.10.1"
 }

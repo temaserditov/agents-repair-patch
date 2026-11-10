@@ -730,20 +730,246 @@ class Repair:
         if self.system=='Windows':
             self.windows()
             return
-        values = {}
-        for name in ['server.mjs','runner.py']:
-            path = self.install/'web-shell'/name
-            plain(path)
-            values[name] = self.baselines['panel'][name].get(sha(read(path)), 'unknown-baseline') if path.is_file() else 'missing'
+        values = self.panel_sources()
         unknown = 'unknown-baseline' in values.values()
         current = all(v=='updated-2026-11-05' for v in values.values())
         self.panel_current = current
-        self.add('webshell', 'unchanged' if current else 'needs-platform-update',
+        # BUG 0005: an edited panel is reported on its own. Asking for the
+        # platform update again would loop: the updater skips edited files.
+        self.add('webshell', 'unchanged' if current else 'skipped:panel-edited' if unknown else 'needs-platform-update',
                  '; '.join(name+': '+label for name,label in values.items())+
-                 ('; documentation: skipped:unknown-baseline; личные правки обновление пропустит.' if unknown else ''))
+                 ('; documentation: skipped:unknown-baseline; панель изменена вручную, штатное обновление её пропустит, правки сохранены.' if unknown else ''),
+                 'warning' if unknown else 'info')
         if self.verify:
             self.panel_api(current)
             self.full_tools(current)
+
+    def content(self):
+        """TASK48: Content defects (BUG 0008/0009/0010, OBS 0008), see vendor/content-repairs.py.
+        Never edits the installed version directory: the platform update reinstalls it."""
+        # plan() never downloads; verify must still see a missing model as an
+        # unfinished repair (mutation reports it unfixable without writing).
+        items = load('content-repairs').plan(self.home, self.system, download=True,
+                                             search_path=None if self.system=='Windows' else self.gateway_path())
+        for item in items:
+            status = item['status']
+            if status!='needs-fix':
+                self.add(item['code'], status, item['detail'], 'info' if status=='unchanged' else 'warning')
+                continue
+            outcome = {}
+            def act(item=item, outcome=outcome):
+                for path in item['paths']:
+                    plain(path)
+                    if path.is_file():
+                        self.backup_file(path, 'content/'+path.relative_to(self.home).as_posix())
+                outcome['status'] = item['apply']()
+            changed_before = self.changed
+            self.mutation(item['code'], item['detail'], act)
+            if isinstance(outcome.get('status'), str):
+                # A network/checksum outcome wrote nothing: reported, not fatal,
+                # and a repeat stays changed:false (e.g. offline model).
+                self.changed = changed_before
+                self.findings[-1].update(status=outcome['status'], severity='warning')
+
+    def compatibility(self):
+        """TASK48: BUG 0014 (repeated top-level platforms: breaks the strict YAML of
+        Hermes 0.23 PM) and BUG 0019 (old Windows runner.ps1 accepts only 0.22.x).
+        Runs before anything parses configs and before the platform update."""
+        for item in load('compat-repairs').plan(self.home, self.hermes, self.install, self.system, self.names, yaml=self.yaml):
+            code, status, detail = item['code'], item['status'], item['detail']
+            if status!='needs-fix':
+                self.add(code, status, detail, 'warning' if status.startswith('skipped') else 'info')
+                continue
+            path = item['paths'][0]
+            def backup(path, before, code=code):
+                if code.startswith('platforms:'):
+                    # config.yaml may hold keys: keep digests only. Effective values
+                    # are proven identical, so the removed blocks were inert.
+                    self.backup_file(path, 'selections/'+code.replace(':','-')+'.json', encoded({'sha256Before':sha(before)}))
+                else:
+                    self.backup_file(path, 'control/runner.ps1', before)
+            self.mutation(code, detail, lambda item=item, backup=backup: item['apply'](backup=backup))
+            if code=='windows-runner-gate' and self.apply and not self.verify:
+                self.windows_panel_start()
+
+    def windows_panel_start(self):
+        """BUG 0019: the old gate already stopped the panel task (LastTaskResult=1,
+        retries spent). Start only OUR task: the one whose action runs this runner.ps1."""
+        runtime = self.install/'control/webshell-runtime.json'
+        plain(runtime)
+        config = (self.installed_json(runtime, 'windows-panel-start') or {}) if runtime.is_file() else {}
+        name = config.get('taskName', '')
+        if not re.fullmatch(r'SerditovAgentsWebShell-[a-f0-9]{16}', name or ''):
+            self.add('windows-panel-restart', 'skipped:task-unknown', 'Задача панели не найдена в настройках; запустите ярлык Агенты.', 'warning')
+            return
+        runner = str(self.install/'control/runner.ps1').replace("'", "''")
+        script = ("$ErrorActionPreference='Stop';$t=Get-ScheduledTask -TaskPath '\\' -TaskName '" + name + "' -ErrorAction SilentlyContinue;"
+                  "if(-not $t){'{\"state\":\"Missing\"}';return};"
+                  "$a=(@($t.Actions)|ForEach-Object {[string]$_.Arguments}) -join ' ';"
+                  "$owned=$a.IndexOf('" + runner + "',[StringComparison]::OrdinalIgnoreCase) -ge 0;"
+                  "$s=[string]$t.State;if($owned -and $s -ne 'Running'){Start-ScheduledTask -TaskPath '\\' -TaskName '" + name + "';$s='Started'};"
+                  "[pscustomobject]@{state=$s;owned=$owned}|ConvertTo-Json -Compress")
+        result = command(['powershell.exe', '-NoProfile', '-NonInteractive', '-Command', script], 60)
+        try:
+            row = json.loads(result.stdout) if result.returncode == 0 else {}
+        except ValueError:
+            row = {}
+        if not isinstance(row, dict) or row.get('state') == 'Missing' or row.get('owned') is not True:
+            self.add('windows-panel-restart', 'skipped:task-not-owned', 'Задача панели отсутствует или запускает другой помощник; не изменялась.', 'warning')
+            return
+        started = row.get('state') == 'Started'
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        deadline = time.monotonic() + 90
+        while time.monotonic() < deadline:
+            try:
+                with opener.open('http://127.0.0.1:8787/api/windows-installer-health', timeout=2) as response:
+                    if response.status == 200:
+                        self.changed = self.changed or started
+                        self.add('windows-panel-restart', 'fixed' if started else 'unchanged', 'Панель отвечает после исправления проверки версии.')
+                        return
+            except (OSError, ValueError):
+                pass
+            time.sleep(2)
+        self.add('windows-panel-restart', 'pending:panel-start', 'Задача панели запущена, ответ ещё не получен; повтори verify через минуту.', 'warning')
+
+    def profile_context(self):
+        """BUG 0007: on Hermes 0.23 every agent also reads its own profile AGENTS.md.
+
+        Our installer applies the reviewed loader change; a Hermes 0.23 placed by a
+        manual or support update may lack it. Same reviewed transform, exact pins.
+        """
+        if self.system not in {'Darwin','Linux'} or not self.hermes_version().startswith('0.23.'):
+            return
+        runtime = self.hermes/'hermes-agent'
+        loader = runtime/'agent/prompt_builder.py'
+        support = runtime/'agent/system_prompt.py'
+        for path in [loader, support]:
+            plain(path)
+        if not loader.is_file():
+            self.add('profile-context', 'skipped:runtime-layout', 'Загрузчик инструкций Hermes не найден; не изменялся.', 'warning')
+            return
+        if support.is_file() and '# student-profile-context-023-v1' in (self.text(support, 'profile-context') or ''):
+            self.add('profile-context', detail='Профильные инструкции подключены адресным ремонтом поддержки.')
+            return
+        raw = read(loader)
+        try:
+            updated, changed = load('profile-context').transform(raw)
+        except ValueError:
+            debug_exception(self.stage)
+            self.add('profile-context', 'skipped:unknown-runtime', 'Загрузчик Hermes отличается от проверенного 0.23.0; не изменялся.', 'warning')
+            return
+        if not changed:
+            self.add('profile-context', detail='Каждый агент читает свой AGENTS.md (Hermes 0.23).')
+            return
+        def write():
+            if read(loader)!=raw:
+                raise ValueError('Concurrent runtime edit preserved')
+            self.backup_file(loader, 'runtime/agent/prompt_builder.py', raw)
+            atomic(loader, updated, loader.stat().st_mode & 0o777)
+            launcher = runtime/'venv/bin/hermes'
+            plain(launcher)
+            # Existing chats get the new system text on their next turn; history kept.
+            for name in ['default']+list(self.names):
+                home = self.hermes if name=='default' else self.profiles/name
+                if launcher.is_file():
+                    try:
+                        result = subprocess.run([str(launcher), 'sessions', 'refresh-prompts', '--json'], capture_output=True, timeout=180,
+                                                env={**os.environ, 'HERMES_HOME': str(home), 'PYTHONDONTWRITEBYTECODE': '1'})
+                    except (OSError, subprocess.TimeoutExpired):
+                        debug_exception(self.stage+':refresh-prompts')
+                        result = subprocess.CompletedProcess([], 124)
+                    if result.returncode:
+                        self.add('profile-context-refresh:'+name, 'pending:refresh-prompts', 'Обновление системного текста диалогов не подтверждено; история не менялась.', 'warning')
+        self.mutation('profile-context', 'Подключить профильный AGENTS.md каждого агента в Hermes 0.23 (BUG 0007).', write)
+
+    def panel_sources(self):
+        """BUG 0006/0001/0015: reviewed fixes of the installed Mac/Linux panel (TASK48).
+
+        Fixed only on the latest reviewed variant: an older panel first takes the
+        platform update, whose updater would skip a file it does not recognise.
+        """
+        repairs = load('panel-repairs')
+        web = self.install/'web-shell'
+        sources = {}
+        for name in ['server.mjs','runner.py']:
+            path = web/name
+            plain(path)
+            sources[name] = (self.text(path, 'webshell:'+name) if path.is_file() else None)
+        def label(name, text):
+            table = self.baselines['panel'][name]
+            if text is None:
+                return 'missing'
+            if name=='runner.py':
+                return table.get(repairs.sha(repairs.canonical_runner(text)), 'unknown-baseline')
+            return table.get(repairs.sha(repairs.canonical_server(text))) or table.get(repairs.sha(repairs.canonical_server_without_sales(text)), 'unknown-baseline')
+        values = {name: label(name, text) for name, text in sources.items()}
+        runner, server = sources['runner.py'], sources['server.mjs']
+        # An edited runner is skipped by the platform updater anyway, so the exact
+        # import fix is safe there too; a known older panel takes the update first.
+        if runner is not None and values['runner.py'] in {'updated-2026-11-05','unknown-baseline'}:
+            state = repairs.runner_state(runner)
+            if state=='applicable':
+                after = repairs.fix_runner(runner)
+                self.mutation('webshell-runner-023', 'Запуск агентов из панели: совместимый импорт подтверждений Hermes 0.23 (BUG 0006).',
+                              lambda: self.write_panel(web/'runner.py', 'web-shell/runner.py', runner, after))
+            else:
+                self.add('webshell-runner-023', 'unchanged' if state=='fixed' else 'skipped:support-edited',
+                         'Импорт подтверждений совместим с Hermes 0.21–0.23.' if state=='fixed' else 'Фрагмент изменён вручную; файл сохранён.',
+                         'info' if state=='fixed' else 'warning')
+        elif runner is not None and values['runner.py'] not in {'unknown-baseline','missing'} and repairs.runner_state(runner)=='applicable' and self.hermes_version().startswith('0.23.'):
+            # Known older panel only: the updater skips an edited one (BUG 0005), so asking again would loop.
+            self.add('webshell-runner-023', 'needs-platform-update', 'Панель старой версии на Hermes 0.23: сначала штатное обновление, затем повтор ремонта.', 'warning')
+        if server is not None and values['server.mjs']=='updated-2026-11-05':
+            states = repairs.server_states(server)
+            if 'applicable' in states.values():
+                after = repairs.fix_server(server)
+                if not self.panel_syntax_ok(after):
+                    self.add('webshell-preflight', 'skipped:syntax-check-unavailable', 'Node панели не найден или проверка не прошла; файл не изменён.', 'warning')
+                else:
+                    self.mutation('webshell-preflight', 'Темы заданий — подсказки, не блокировка; готовность 503, отказ 422 (BUG 0001); метка Продажника (BUG 0015).',
+                                  lambda: self.write_panel(web/'server.mjs', 'web-shell/server.mjs', server, after))
+            else:
+                self.add('webshell-preflight', 'unchanged' if all(s=='fixed' for s in states.values()) else 'skipped:support-edited',
+                         ', '.join(k+': '+v for k,v in states.items()))
+        return values
+
+    def write_panel(self, path, relative, before, after):
+        if self.text(path, 'webshell') != before:
+            raise ValueError('Concurrent panel edit preserved')
+        self.backup_file(path, relative)
+        mode = path.stat().st_mode & 0o777
+        atomic(path, after.encode('utf-8'), mode)
+        marker = self.control/'web-shell-restart-pending'
+        plain(marker)
+        if not marker.exists():
+            atomic(marker, b'repair\n')
+        self.panel_changed = True
+
+    def panel_syntax_ok(self, text):
+        node = next((str(p) for p in [self.hermes/'node/bin/node', self.home/'.hermes/node/bin/node'] if p.is_file()), None) or shutil.which('node')
+        if not node:
+            return False
+        with tempfile.TemporaryDirectory(prefix='agents-repair-panel-') as directory:
+            candidate = Path(directory)/'server.mjs'
+            candidate.write_text(text, encoding='utf-8')
+            try:
+                return command([node, '--check', str(candidate)], timeout=60).returncode == 0
+            except Exception:
+                debug_exception(self.stage+':panel_syntax')
+                return False
+
+    def hermes_version(self):
+        for path in [self.hermes/'hermes-agent/install-stamp.json']:
+            plain(path)
+            if path.is_file():
+                value = (self.installed_json(path, 'hermes-version') or {}).get('baseVersion')
+                if isinstance(value, str) and re.fullmatch(r'\d+\.\d+\.\d+', value):
+                    return value
+        path = self.hermes/'hermes-agent/pyproject.toml'
+        plain(path)
+        text = self.text(path, 'hermes-version') if path.is_file() else None
+        match = re.search(r'(?m)^version\s*=\s*"(\d+\.\d+\.\d+)"', text or '')
+        return match.group(1) if match and match.group(1)!='0.0.0' else ''
 
     def full_tools(self, current):
         if not current or 'designer' not in self.names:
@@ -1123,6 +1349,11 @@ class Repair:
         except (ValueError, OSError):
             version = 'unknown'
         replaced = stamp.stat().st_mtime
+        # A reviewed loader change (BUG 0007) also needs the running gateway to reload.
+        loader = self.hermes/'hermes-agent/agent/prompt_builder.py'
+        plain(loader)
+        if loader.is_file():
+            replaced = max(replaced, loader.stat().st_mtime)
         if started >= replaced-5:
             self.add('gateway-runtime', detail='Gateway (pid %d) запущен после текущей установки Hermes %s на диске.'%(pid, version))
             return
@@ -1381,6 +1612,16 @@ class Repair:
         if not masked:
             plain(unit)
             existed = unit.is_file()
+            # BUG 0003: only a unit Hermes wrote for THIS installation is ours
+            # (same rule as install-vps-infobiz-agents.sh). Another user unit is
+            # preserved and reported, never stopped or masked blindly.
+            text = self.text(unit, 'linux-user-gateway') if existed else ''
+            if existed and (text is None or str(self.hermes/'hermes-agent')+'/' not in text):
+                self.add('linux-user-gateway', 'skipped:foreign-user-unit', 'Пользовательская служба hermes-gateway не от этой установки; сохранена без изменений.', 'warning')
+                self.linux_gateway_owner(False)
+                if self.verify:
+                    self.linux_verify()
+                return
             def fix():
                 result = command(['systemctl','--user','disable','--now','hermes-gateway.service'])
                 output = result.stdout+result.stderr
@@ -1473,6 +1714,8 @@ class Repair:
             self.tier = (self.installed_json(windows_receipt, 'windows-receipt') or {}).get('tier') if windows_receipt.is_file() else None
         if self.tier not in {1,2,3} and receipt not in self.unreadable and self.control/'windows-install-receipt.json' not in self.unreadable:
             raise ValueError('Missing purchased composition')
+        self.stage = 'compatibility'
+        self.compatibility()
         configs = [(self.hermes/'config.yaml', 'default')] + [(self.profiles/name/'config.yaml',name) for name in self.names]
         # Snapshot every purchased profile before helpers or serializers mutate it.
         kanban_values = {}
@@ -1501,9 +1744,12 @@ class Repair:
         for name in self.names:
             self.stage = 'soul:'+name
             self.soul(name)
-        for stage in ['team', 'skills', 'logs', 'tirith', 'panel', 'speech', 'gateway_runtime']:
+        for stage in ['team', 'skills', 'logs', 'tirith', 'panel', 'speech', 'content', 'profile_context', 'gateway_runtime']:
             self.stage = stage
             getattr(self, stage)()
+        if getattr(self, 'panel_changed', False):
+            self.stage = 'panel-restart'
+            self.panel_restart()
         if self.system=='Linux':
             self.stage = 'linux'
             self.linux()

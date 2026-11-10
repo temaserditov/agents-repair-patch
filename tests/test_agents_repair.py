@@ -108,7 +108,7 @@ import json,os
 s=json.load(open(os.environ['REPAIR_TEST_SYSTEMD']))
 if s['active']:print('4321 1 '+os.environ['REPAIR_TEST_HOME']+'/.hermes/hermes-agent/venv/bin/hermes gateway run')
 '''.replace('PYTHON',sys.executable)); (self.bin/'ps').chmod(0o755)
-        write(self.home/'.config/systemd/user/hermes-gateway.service','[Service]\nExecStart=hermes gateway run\n')
+        write(self.home/'.config/systemd/user/hermes-gateway.service','[Service]\nExecStart='+str(self.hermes)+'/hermes-agent/venv/bin/hermes gateway run\n')
 
     def run(self, apply=False, verify=False, **kwargs):
         r = repair.Repair(self.home,self.install,self.system,self.hermes,apply=apply,verify=verify,**kwargs)

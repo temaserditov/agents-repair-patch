@@ -10,9 +10,18 @@
 вторая служба gateway; на Mac сломанные медиапрограммы восстанавливаются по
 закреплённым ссылкам и SHA-256. Личные настройки и дополнения сохраняются.
 
-Новые скиллы, Content, локальное распознавание и панель доставляет только
-штатное обновление с новым кодом из кабинета. Патч не получает тарифный пакет
-и не заменяет это обновление. Windows v1/v2 требует Windows v3.
+С выпуска TASK48 (FIX_0573) `repair --apply` также чинит на месте:
+совместимость панели с Hermes 0.23 (импорт подтверждений в runner, preflight без
+блокировки тем, метка Продажника), повторный `platforms:` в config.yaml перед
+переходом на 0.23, проверку версии в старом `control/runner.ps1` Windows v2,
+профильный AGENTS.md на Hermes 0.23, поставленном вручную, и дефекты Content
+(тема `client`, PDF кадра, модель U2Net, временные файлы Mac) — в соседней
+копии версии `<v>-repair1`, исходный каталог версии не меняется.
+
+Hermes 0.23.0, новые скиллы и агентов по текущему тарифу и бонусам доставляет
+штатное обновление с новым кодом из кабинета; после него ремонт запускается ещё
+раз (см. задание для Codex). Патч не получает тарифный пакет и не заменяет это
+обновление. Windows v1/v2 требует Windows v3.
 
 Запускайте из распакованной папки:
 
@@ -44,8 +53,9 @@ JSON сохраняется в `Downloads` с правами 0600 (на Windows 
 InfobizAgents; `--json ФАЙЛ` — место отчёта. `diagnose` и пробный `repair`
 не записывают в установку, кроме описанного ниже повторного запуска панели; создание JSON в «Загрузки» — единственное исключение.
 Второй ремонт не меняет установку и сообщает `changed:false`; каждый запуск
-по-прежнему создаёт отдельный отчёт. `diagnose` и `verify` на Mac при наличии `web-shell-restart-pending` пробуют
-bootstrap/kickstart только панели. Успех снимает маркер (`fixed`), отказ оставляет
+по-прежнему создаёт отдельный отчёт. Единственное исключение: при метке `web-shell-restart-pending`
+`diagnose`, пробный `repair` и `verify` перезапускают только панель (Mac — bootstrap/kickstart,
+Linux — `systemctl restart infobiz-web-shell.service`). Успех снимает маркер (`fixed`), отказ оставляет
 его (`skipped:launchctl-unavailable`). Другие настройки эти команды не меняют.
 
 Коды завершения: 0 — проверенные настройки исправны (либо составлен план);
@@ -65,11 +75,11 @@ bootstrap/kickstart только панели. Успех снимает мар�
 передаётся системной службе через штатный протокол Hermes с проверкой стабильности.
 На Windows модели Content проверяются по SHA-256 блоками по 1 МБ, до 2 ГБ на файл.
 
-Состав: `agents_repair.py`, два лаунчера, `known-baselines.json`, восемь поставляемых
-помощников в `vendor/` (`designer-tools.py`, `student-runtime.py`, `security-tools.py`,
+Состав: `agents_repair.py`, два лаунчера, `known-baselines.json`, помощники в
+`vendor/` (`designer-tools.py`, `student-runtime.py`, `security-tools.py`,
 `student-skill-repairs.py`, `sync-tariff-panel.py`, `team-runtime.py` с `plugins/infobiz-team/`,
-`agents-diagnose.mjs`, `profile-probe.py`), задание для
-Codex и изолированные тесты. В копии исходников — 81 тест:
+`agents-diagnose.mjs`, `profile-probe.py`, `panel-repairs.py`, `compat-repairs.py`,
+`content-repairs.py`, `profile-context.py`), задание для Codex и изолированные тесты:
 `npm run test:agents-repair-patch`. Сборка: `python3 -B installer/scripts/build-repair-patch.py
 --version v2026.11.05.1 --output /tmp/agents-repair-release`.
 

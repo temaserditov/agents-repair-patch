@@ -41,6 +41,26 @@ export function validateManifest(value){
 export function normalizedTextHash(data){
   try{return sha(new TextDecoder('utf-8',{fatal:true}).decode(data).replace(/\r\n/g,'\n'));}catch{return null;}
 }
+// agents-tooling-bootstrap (public student add-on) appends one marked block to a
+// profile's AGENTS.md/SOUL.md; a platform update may move it under the personal
+// additions heading it creates. FIX_0572: such a file is the package text plus the
+// add-on, not a damaged file. Any other difference still reads as changed.
+const toolingBegin='<!-- agents-student-tooling:start -->',toolingEnd='<!-- agents-student-tooling:end -->';
+// A server before FIX_0572 rejects an unknown file state for the whole report:
+// the add-on goes as 'changed' plus a hint that the newer server maps back.
+export function wireFiles(files){return files.map(f=>f.state==='tooling-addon'?{path:f.path,state:'changed',addon:'tooling'}:f);}
+export function withoutToolingBlock(text){
+  const start=text.indexOf(toolingBegin),end=text.indexOf(toolingEnd);
+  if(start<0||end<start||text.indexOf(toolingBegin,start+1)>=0||text.indexOf(toolingEnd,end+1)>=0)return null;
+  const rest=(text.slice(0,start)+text.slice(end+toolingEnd.length)).trimEnd()
+    .replace(/\n*## Личные дополнения \(перенесены при обновлении [^)\n]{1,120}\)$/,'').trimEnd();
+  return [rest+'\n',rest];
+}
+function toolingAddonOnly(bytes,expected,textExpected){
+  let text;try{text=new TextDecoder('utf-8',{fatal:true}).decode(bytes).replace(/\r\n/g,'\n');}catch{return false;}
+  const variants=withoutToolingBlock(text);
+  return !!variants&&variants.some(v=>sha(v)===expected||sha(v)===textExpected);
+}
 export function observeFiles(home,manifest){
   return Object.entries(manifest.files).map(([relative,expected])=>{
     const file=path.join(home,'profiles',...relative.split('/'));let state='unknown';
@@ -54,6 +74,7 @@ export function observeFiles(home,manifest){
           const bytes=fs.readFileSync(file);
           state=sha(bytes)===expected?'ok':'changed';
           if(state==='changed'&&/\.(md|txt|yaml|yml|json|mjs|py)$/i.test(relative)&&normalizedTextHash(bytes)===(manifest.textHashes?.[relative]||expected))state='format-only';
+          if(state==='changed'&&/(^|\/)(AGENTS|SOUL)\.md$/.test(relative)&&toolingAddonOnly(bytes,expected,manifest.textHashes?.[relative]||expected))state='tooling-addon';
         }
       }
     }catch(error){state=error.code==='ENOENT'?'missing':'unreadable';}
@@ -174,7 +195,7 @@ export function preservedApplyWarnings(owner,manifest,files,home,{allowClean=fal
        !state.packageFiles||typeof state.revision!=='string'||
        (manifest.revision!=='local-record'&&state.revision!==manifest.revision)||
        !Object.entries(manifest.files).every(([n,h])=>h===(manifest.revision==='local-record'?state.files[n]:state.packageFiles[n])))return false;
-    const problems=files.filter(f=>!['ok','format-only'].includes(f.state));
+    const problems=files.filter(f=>!['ok','format-only','tooling-addon'].includes(f.state));
     return (allowClean||problems.length>0)&&problems.every(f=>{
       if(apply.conflicts.includes(f.path))return ['changed','unreadable','linked','oversized'].includes(f.state);
       // An online manifest names package hashes; a completed merge has its own
@@ -218,16 +239,19 @@ export async function main({owner=os.homedir(),afterInstall=false}={}){
     const result=run(name==='node'?(process.env.AG_DIAG_NODE||process.execPath):name,[name==='ffmpeg'||name==='ffprobe'?'-version':'--version'],{timeout:3000});
     rtTools[name]=result.status===0?'available':result.error?.code==='ENOENT'?'missing':'unknown';
   }
-  const report={schemaVersion:1,reportId:crypto.randomUUID(),createdAt:new Date().toISOString(),target:process.platform==='darwin'?'mac':process.platform==='win32'?'windows':'vps',manifestSha256:sha(JSON.stringify(manifest)),files,profiles:observed,tools:rtTools};
+  const report={schemaVersion:1,reportId:crypto.randomUUID(),createdAt:new Date().toISOString(),target:process.platform==='darwin'?'mac':process.platform==='win32'?'windows':'vps',manifestSha256:sha(JSON.stringify(manifest)),
+    files:wireFiles(files),profiles:observed,tools:rtTools};
   // Save before upload, including when offline. Only finite observations, no raw
   // output, full local paths, file contents, prompts, config or conversations.
   const checks=profileCheckState(manifest,observed);
   const compatibilityWarning=afterInstall&&checks.compatibilityGap&&!checks.blocked&&preservedApplyWarnings(owner,manifest,files,rt?.home,{allowClean:true});
   const warning='Проверка загрузчика не поддерживает эту версию Hermes, инструкции не подтверждены.';
   const saved=saveReport(owner,{basis,manifest,report,...(compatibilityWarning?{warnings:[warning]}:{})});
-  const problems=files.filter(f=>!['ok','format-only'].includes(f.state));
+  const problems=files.filter(f=>!['ok','format-only','tooling-addon'].includes(f.state));
   const formatted=files.filter(f=>f.state==='format-only');
   if(formatted.length)console.log('Изменён только формат UTF-8 BOM/CRLF, текст совпадает: '+formatted.length+'.');
+  const addon=files.filter(f=>f.state==='tooling-addon');
+  if(addon.length)console.log('Инструкции дополнены только блоком дополнительных инструментов, остальной текст совпадает: '+addon.length+'.');
   console.log(problems.length?'Обнаружены отсутствующие, изменённые или недоступные файлы: '+problems.length+'.':'Все файлы записанного набора на месте.');
   for(const p of observed)console.log(titles[p.name]+': '+(p.probe==='ok'?'инструкции '+(p.instructions==='loaded'?'подключаются':'не подтверждены')+', видно скиллов '+p.skills.length:'подключение проверить не удалось')+'.');
   for(const p of observed)if(Object.values(p.toolAccess||{}).includes('blocked'))console.log(titles[p.name]+': в настройках запрещены необходимые инструменты. Наличие скиллов на диске этого не исправляет.');
