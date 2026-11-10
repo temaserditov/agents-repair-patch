@@ -25,6 +25,7 @@
   "panel": {
     "runner.py": {
       "1f00846163e636c8e1537b296b3bbf48b7019d002a8ce9bdda0275de68948a34": "original-0.3.0",
+      "4cf98c240e6d50676351e2b4e8e1096cada212e57e44368c65e06983403b00e4": "updated-2026-11-05",
       "5ee341cd96fdb83ed916af4c640f4de586344c53ecca0b38b13a2a6dfc10fb9f": "updated-2026-11-05"
     },
     "server.mjs": {
@@ -38,8 +39,10 @@
       "70bdee29fd0e1b69409fb91123df9526ac527335828c5d99096af9da83ecd38e": "accepted-predecessor",
       "7becec2452203c3edde8102632605a9f4f48037ef2c31ece6925d34c7836bd01": "accepted-predecessor",
       "8e18dbb8c22f0e78582bc15ecfb68804885423d90f394253a30fc141fc7951c9": "original-0.3.0",
+      "9131732a7fe4b80d008f31400fdb8298ea4ca8c8e0577ac801990a8f7a3ec068": "updated-2026-11-05",
       "ac8bc765554010062c9bdf0ecf1bdc1856cbc15e13840d316298cbde2c70798d": "accepted-predecessor",
       "b24691818054ca2fe97355085c9975c4ff6a5213aa52004a8c0d683028c45b15": "updated-2026-11-05",
+      "b5f7d1ef53f48ae589eebf7df3ac8b72660816e9b16a548b9250d61b5c2a9bc2": "updated-2026-11-05",
       "bf7bdcd0045997f964f1187f6fadafd409b56eca97f73c59c4af691b2f360b7e": "updated-2026-11-05",
       "c80f2e16dc7709d711abc1db43e3c3da01378a24b364837f133e34a9773969e9": "accepted-predecessor",
       "cb0295f51b4f9f2dfeb10b02bc71a37f41a5573f6d97a2eaba80ae47d66c6e04": "accepted-predecessor",
@@ -48,7 +51,7 @@
       "ec7d5ad738e6ef2a2a746c42ad50d745448f2d779ec70d413dd96f634a6d4877": "accepted-predecessor"
     }
   },
-  "revision": "agents-release-20261108.1",
+  "revision": "agents-release-20261110.1",
   "schemaVersion": 1,
   "upstreamSoulHashes": [
     "2765a846e1bb371d78d3b93b403dfb0f8d1ba1a9895edb5f608367abfe81194d",

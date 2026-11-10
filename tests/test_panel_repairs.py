@@ -150,6 +150,32 @@ class PanelIntegration(unittest.TestCase):
         panel_codes = {'webshell', 'webshell-runner-023', 'webshell-preflight'}
         self.assertEqual([x for x in again['findings'] if x['code'] in panel_codes and x['status'] != 'unchanged'], [])
 
+    def test_release_20261110_panel_is_the_patched_panel_and_stays_unchanged(self):
+        # FIX_0576: new installs receive exactly the bytes the patch writes, so a
+        # patched student and a fresh install share one known updater variant.
+        release = ROOT/'apps/lms/installer-assets/agents/agents-tier-3-agents-release-20261110.1.tar.gz'
+        with tarfile.open(release) as archive:
+            manifest = json.loads(archive.extractfile('profile/post-install/update-manifest.json').read())
+            def current(name, before):
+                variant = manifest['files'][name]['variants'][before]
+                return archive.extractfile('profile/post-install/'+variant['path']).read()
+            runner = current('runner.py', RUNNER_UPDATED)
+            servers = {key: current('server.mjs', digest) for key, digest in SERVERS.items()}
+        self.assertTrue(hashlib.sha256(runner).hexdigest().startswith(RUNNER_SUPPORT_FIXED))
+        self.assertEqual(runner.decode(), panel.fix_runner(payload(RUNNER_UPDATED).decode()))
+        for key, digest in SERVERS.items():
+            self.assertEqual(servers[key].decode(), panel.fix_server(payload(digest).decode()), key)
+            self.assertEqual(set(panel.server_states(servers[key].decode()).values()), {'fixed'}, key)
+        if not node():
+            self.skipTest('node is not installed')
+        f = self.fixture(runner, servers['b2469181'])
+        before = suite.tree(f.install/'web-shell')
+        out = f.run(True)
+        self.assertEqual(self.finding(out, 'webshell-runner-023')['status'], 'unchanged')
+        self.assertEqual(self.finding(out, 'webshell-preflight')['status'], 'unchanged')
+        self.assertEqual(suite.tree(f.install/'web-shell'), before)
+        self.assertFalse((f.control/'web-shell-restart-pending').exists())
+
     def test_verify_reports_an_unfixed_runner(self):
         f = self.fixture(payload(RUNNER_UPDATED), payload(SERVERS['bf7bdcd0']))
         out = f.run(verify=True)
@@ -246,10 +272,10 @@ class PanelIntegration(unittest.TestCase):
         import types
         f = suite.Fixture(self.root, 'Linux', 3)
         calls = []
-        def plan(home, system, download=True, search_path=None):
+        def plan(home, system, download=True, search_path=None, hermes=None):
             calls.append(download)
             return [{'code': 'content:u2net-model', 'status': 'needs-fix', 'detail': 'model', 'paths': [], 'apply': lambda: 'unavailable:network'}]
-        stub = types.SimpleNamespace(plan=plan)
+        stub = types.SimpleNamespace(plan=plan, check_bundle=lambda: None)
         original = repair.load
         with patch.object(repair, 'load', side_effect=lambda name: stub if name == 'content-repairs' else original(name)):
             r = repair.Repair(f.home, f.install, 'Linux', f.hermes, apply=True)

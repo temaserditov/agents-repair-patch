@@ -3,13 +3,16 @@
 BUG 0008  portable contract.py: the neutral theme ``client`` is rejected.
 BUG 0009  portable board.py: ``Board`` lacks ``layout``; the PDF export fails.
 BUG 0010  portable resources/models/u2net_human_seg.onnx is missing.
-BUG 0013  macOS person-cutout.sh: bare python3 without PIL/numpy/cv2 (detected only).
+BUG 0013  macOS person-cutout.sh: bare python3 without PIL/numpy/cv2, and the Swift
+          person-cutout compiled on the learner's Mac (fails without a complete SDK).
+          The repair copy carries a reviewed prebuilt universal binary and a fixed
+          script; Content/.venv gets pinned, hash-checked wheels (FIX_0584).
 OBS 0007/0008  macOS doc.sh / pip.sh use fixed /tmp names shared by every run.
 
 The installer's own version directory ``releases/<v>`` is never written: a
 reinstall of the same revision compares those bytes with the package
 (setup-tariff-content.py, "Immutable Content release differs" / "Changed
-native Content source preserved"). A sibling ``<v>-repair1`` is built instead:
+native Content source preserved"). A sibling ``<v>-repairN`` is built instead:
 unchanged files are hard links to ``<v>``, the reviewed fixes are new files,
 the model is added there, and ``active.json`` is switched to it. When a
 reinstall puts ``active.json`` back on ``<v>``, the intact copy is reused.
@@ -24,6 +27,7 @@ import http.client
 import json
 import os
 from pathlib import Path
+import platform
 import re
 import shutil
 import stat
@@ -45,7 +49,6 @@ AGENT = 'SerditovAgents'
 CUTOUT_BINDING = ('MODEL_SHA256="' + MODEL_SHA256 + '"').encode()
 VERSION = re.compile(r'[A-Za-z0-9][A-Za-z0-9.-]{0,200}')
 COPY_NAME = re.compile(r'[a-zA-Z0-9_.-]{1,180}')  # agents_repair.windows / content_ready
-SUFFIX = '-repair1'
 TEXT_LIMIT = 1024 * 1024
 
 CONTRACT_FIX = [
@@ -119,18 +122,68 @@ PIP_FIX = [(
 # Written by the prebuilt speaker and read by board/pip binaries: a shell edit cannot isolate it.
 SPEAKER_PANEL = b'/tmp/speaker_panel.png'
 CUTOUT_CALL = b'python3 "$CLEAN" "$TMP_DIR/raw.png" "$2"\n'
+# BUG 0013 (FIX_0584). The shipped script compiles person-cutout.swift on the
+# learner's Mac; a broken Command Line Tools SDK (IOKit audio/IOAudioDefines.h)
+# stops Vision there. The repair copy carries the reviewed prebuilt binary, so
+# the script compiles only when no binary exists (an older binary is kept).
+CUTOUT_BUILD = b'if [[ ! -x "$BIN" || "$BIN" -ot "$SRC" ]]; then\n  swiftc -O "$SRC" -o "$BIN"\nfi\n'
+CUTOUT_BUILD_FIXED = (b'# BUG 0013: the repair copy carries a reviewed prebuilt person-cutout; compile only without it.\n'
+                      b'if [[ ! -x "$BIN" ]]; then\n  swiftc -O "$SRC" -o "$BIN"\nfi\n')
+CUTOUT_CALL_FIXED = (b'PYTHON=python3\n'
+                     b'# BUG 0013: Documents/Content/.venv holds pinned Pillow/NumPy/OpenCV wheels; python3 stays the fallback.\n'
+                     b'VENV_PYTHON="$ROOT/../../../../.venv/bin/python"\n'
+                     b'if [[ -x "$VENV_PYTHON" ]]; then PYTHON="$VENV_PYTHON"; fi\n'
+                     b'"$PYTHON" "$CLEAN" "$TMP_DIR/raw.png" "$2"\n')
+CUTOUT_FIX = [(CUTOUT_BUILD, CUTOUT_BUILD_FIXED), (CUTOUT_CALL, CUTOUT_CALL_FIXED)]
+# The prebuilt binary is bound to the one person-cutout.swift every released
+# revision ships (20261101.1 ... 20261110.1). Built in a clean Tart macOS 15.7.7
+# guest, Command Line Tools Swift 6.1.2, `swiftc -O -target {arm64,x86_64}-apple-macos12.0`,
+# `lipo -create`, ad-hoc `codesign --force -s - --timestamp=none`; two clean builds
+# gave identical bytes.
+CUTOUT_SOURCE_SHA256 = 'fe9884fc2061c5d36d597ca1a9cd1ee5efcd973a2340f4eda8a065f2730494b1'
+CUTOUT_BINARY_SHA256 = '0ed4bc48a15a71acd8fc6704e53a8e28c6f47afa170f0945924d38334aba2eea'
+CUTOUT_BINARY = Path(__file__).resolve().parent / 'bin/person-cutout'
+CUTOUT_RELATIVE = 'tools/person-cutout'
+
+
+class BundleError(RuntimeError):
+    """The patch bundle itself is incomplete: never a per-learner skip."""
+# Wheels of a learner's verified manual repair (10.11), CPython 3.12, macOS.
+# opencv-python-headless 5.0.0.93 needs macOS 13 (arm64) / 14 (Intel).
+CUTOUT_PYTHON = '3.12.12'
+CUTOUT_REQUIREMENTS = (
+    'numpy==2.5.4'
+    ' --hash=sha256:b11e8fda06a7d69f15ebf542660b74466c2e51094800c1fb794f47ad4faeef17'
+    ' --hash=sha256:9cb18a327b49c5c337f972b03682f6a49855525faaf3c0d3e9c96cd0fd8880a8'
+    ' --hash=sha256:c6342f54c67093cae5c0227eb0eb772fdb79f2a2c37a6eb278b9909ee06aa356'
+    ' --hash=sha256:aec3fc4b32ff82421274f5d205c559c51c840c8df66a78efd7f3612dd005a26a\n'
+    'pillow==13.0.0'
+    ' --hash=sha256:fc481f742ccda20e9ed760b8f978dff50f2a4e9bc253ac167fb0a05b0783ef52'
+    ' --hash=sha256:67c8d44ad89fa7eb88de5d6ef6199b1e03dd24974f85a67639fc8badb801fe79\n'
+    'opencv-python-headless==5.0.0.93'
+    ' --hash=sha256:030ca5e0837a2963ab36ef896baa9767eb8d2b83353fb28af5a521e40dd8756f'
+    ' --hash=sha256:1e55af3abfb462eeeabe5c775f12bdb36216d8a93a3583d69e6bd6e1d6ba7d00\n'
+)
+CUTOUT_MIN_MACOS = {'arm64': 13, 'x86_64': 14}
 
 ENGINES = {
     # kind: pointer, releases, fixes (relative to the version directory), link-tolerant
     # subtree (the Content-owned uv venv links its interpreter), subtrees not compared
     # for an existing copy, directories recreated empty instead of linked.
+    # ``suffix`` names this patch's copy; ``previous`` names copies of earlier
+    # patches, rebuilt from <v> with every fix (a copy is never edited in place).
+    # ``optional`` fixes may be absent from a version; ``previous_fixes`` are the
+    # fixes an earlier copy holds. ``additions`` are new files of the copy.
     'portable': {'pointer': 'tools/agents-engine/active.json', 'releases': 'tools/agents-engine/releases',
                  'fixes': {'portable/contract.py': ('BUG 0008', CONTRACT_FIX), 'portable/board.py': ('BUG 0009', BOARD_FIX)},
-                 'links': 'portable/runtime', 'dynamic': ('portable/runtime', 'portable/resources/models'), 'fresh': ()},
+                 'links': 'portable/runtime', 'dynamic': ('portable/runtime', 'portable/resources/models'), 'fresh': (),
+                 'suffix': '-repair1', 'previous': (), 'optional': (), 'previous_fixes': (), 'additions': False},
     'mac': {'pointer': 'tools/swift-design-engine/active.json', 'releases': 'tools/swift-design-engine/releases',
-            'fixes': {'doc.sh': ('OBS 0008', DOC_FIX), 'pip.sh': ('OBS 0008', PIP_FIX)},
+            'fixes': {'doc.sh': ('OBS 0008', DOC_FIX), 'pip.sh': ('OBS 0008', PIP_FIX), 'person-cutout.sh': ('BUG 0013', CUTOUT_FIX)},
             # Prebuilt Swift tools overwrite out/* in place; a link there would write into <v>.
-            'links': None, 'dynamic': ('out',), 'fresh': ('out',)},
+            'links': None, 'dynamic': ('out',), 'fresh': ('out',),
+            'suffix': '-repair2', 'previous': ('-repair1',), 'optional': ('person-cutout.sh',),
+            'previous_fixes': ('doc.sh', 'pip.sh'), 'additions': True},
 }
 
 
@@ -220,7 +273,7 @@ def _version(pointer, root):
     return version, data
 
 
-def plan(home, system, *, download=True, opener=None, search_path=None):
+def plan(home, system, *, download=True, opener=None, search_path=None, hermes=None):
     """Planned Content repairs. Each item: code, detail, status, paths, apply.
 
     ``paths`` lists only files outside the new repair copy that ``apply()``
@@ -237,9 +290,9 @@ def plan(home, system, *, download=True, opener=None, search_path=None):
         if not project.is_dir():
             return []
         if system == 'Darwin':
-            return _engine(home, project, 'mac', download, None, search_path)
+            return _engine(home, project, 'mac', download, None, search_path, hermes)
         if system == 'Linux':
-            return _engine(home, project, 'portable', download, opener or urllib.request.urlopen, None)
+            return _engine(home, project, 'portable', download, opener or urllib.request.urlopen, None, hermes)
         if system == 'Windows':
             return _windows(home, project)
     except (ValueError, OSError):
@@ -280,14 +333,15 @@ def _derived(relative):
     return '__pycache__' in relative.split('/') or relative.endswith(('.pyc', '.pyo'))
 
 
-def _copy_intact(source, copy, expected, spec):
+def _copy_intact(source, copy, expected, spec, additions=None, skip=()):
     """An existing copy is ours: every engine file of ``source`` is present unchanged
-    (same inode or same bytes) and every fixed file holds the expected fixed bytes."""
+    (same inode or same bytes), every fixed file holds the expected fixed bytes and
+    every added file holds exactly the reviewed bytes."""
     try:
         if not copy.is_dir() or copy.is_symlink():
             return False
         for relative, kind in _entries(source, spec['links']):
-            if _under(relative, spec['dynamic']) or _derived(relative):
+            if _under(relative, spec['dynamic']) or _derived(relative) or relative in (additions or {}) or relative in skip:
                 continue
             mine, theirs = copy / relative, source / relative
             if kind == 'dir':
@@ -307,13 +361,17 @@ def _copy_intact(source, copy, expected, spec):
             python = copy / spec['links'] / ('Scripts/python.exe' if os.name == 'nt' else 'bin/python')
             if not os.path.lexists(str(python)):
                 return False
+        for relative, data in (additions or {}).items():
+            mine = copy / relative
+            if mine.is_symlink() or not mine.is_file() or mine.read_bytes() != data:
+                return False
         return True
     except (OSError, ValueError):
         return False
 
 
-def _build_copy(source, releases, name, expected, spec, home):
-    """Hard-link ``source`` into ``releases/<name>``; fixed files are new. None or a status."""
+def _build_copy(source, releases, name, expected, spec, home, additions=None):
+    """Hard-link ``source`` into ``releases/<name>``; fixed and added files are new. None or a status."""
     final = releases / name
     temporary = releases / (name + '.tmp-' + uuid.uuid4().hex[:12])
     _plain(temporary, home)
@@ -324,6 +382,8 @@ def _build_copy(source, releases, name, expected, spec, home):
             src, dst = source / relative, temporary / relative
             if any(relative.startswith(p + '/') for p in spec['fresh']):
                 continue  # Generated output: recreated empty, never linked.
+            if relative in (additions or {}):
+                continue  # A learner-built artefact of the reviewed source: the copy gets the reviewed binary.
             if kind == 'dir':
                 os.mkdir(str(dst))
                 os.chmod(str(dst), stat.S_IMODE(src.stat().st_mode))
@@ -344,7 +404,17 @@ def _build_copy(source, releases, name, expected, spec, home):
                                        getattr(errno, 'ENOTSUP', -1), getattr(errno, 'EOPNOTSUPP', -1)}:
                         return 'skipped:hardlink-unavailable'
                     raise
-        for relative, data in expected.items():
+        for relative, data in (additions or {}).items():
+            dst = temporary / relative
+            if os.path.lexists(str(dst)) or not dst.parent.is_dir():
+                raise ValueError('Reviewed fragment not found')
+            fd = os.open(str(dst), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o755)
+            with os.fdopen(fd, 'wb') as out:
+                out.write(data)
+                out.flush()
+                os.fsync(out.fileno())
+            os.chmod(str(dst), 0o755)
+        for relative, data in list(expected.items()) + list((additions or {}).items()):
             if (temporary / relative).read_bytes() != data:
                 raise ValueError('Reviewed fragment not found')
         _plain(final, home)
@@ -396,64 +466,128 @@ def _model_state(directory, home):
     return 'present'
 
 
-def _engine(home, project, kind, download, opener, search_path):
+def _prebuilt_cutout():
+    """The reviewed universal person-cutout of this bundle. A missing or different
+    file is an incomplete bundle: it fails the whole run, never a quiet skip."""
+    try:
+        data = CUTOUT_BINARY.read_bytes()
+    except OSError:
+        raise BundleError('Incomplete repair bundle') from None
+    if sha(data) != CUTOUT_BINARY_SHA256:
+        raise BundleError('Incomplete repair bundle')
+    return data
+
+
+def check_bundle():
+    """For agents_repair start-up on every OS: the shipped binary is the reviewed one."""
+    _prebuilt_cutout()
+
+
+def _cutout_additions(source, states, home):
+    """New files of the Mac copy: the prebuilt person-cutout for the reviewed Swift
+    source and a script the patch owns. A binary the learner's Mac compiled into <v>
+    is a build artefact of that same source: the copy gets the reviewed one instead."""
+    if 'person-cutout.sh' not in states:
+        return {}
+    swift = source / 'tools/person-cutout.swift'
+    try:
+        _plain(swift, home)
+        if not swift.is_file() or _file_sha(swift) != CUTOUT_SOURCE_SHA256:
+            return {}
+    except (ValueError, OSError):
+        return {}  # A linked or unreadable source: no binary, the rest of Content is still repaired.
+    return {CUTOUT_RELATIVE: _prebuilt_cutout()}
+
+
+def _engine(home, project, kind, download, opener, search_path, hermes=None):
     spec = ENGINES[kind]
     pointer, releases = project / spec['pointer'], project / spec['releases']
     active, before = _version(pointer, home)
     if active is None:
         return []
-    on_copy = active.endswith(SUFFIX)
-    base = active[:-len(SUFFIX)] if on_copy else active
-    name = base + SUFFIX
-    if not base or not COPY_NAME.fullmatch(name):
+    suffix = spec['suffix']
+    on_copy = active.endswith(suffix)
+    previous = None if on_copy else next((p for p in spec['previous'] if active.endswith(p)), None)
+    base = active[:-len(suffix)] if on_copy else active[:-len(previous)] if previous else active
+    name = base + suffix
+    if not base or not COPY_NAME.fullmatch(name) or not VERSION.fullmatch(base):
         raise ValueError('Invalid Content registration')
-    current, copy = releases / active, releases / name
-    _plain(current, home); _plain(copy, home)
-    if not current.is_dir():
+    current, copy, origin = releases / active, releases / name, releases / base
+    _plain(current, home); _plain(copy, home); _plain(origin, home)
+    if not current.is_dir() or (previous and not origin.is_dir()):
         return [_item('content:' + kind + '-repair', 'Активная версия Content отсутствует; нужна штатная установка.', 'skipped:content-incomplete')]
     if kind == 'portable':
         runtime = current / 'portable/runtime/bin/python'
         if not (current / 'portable/cli.py').is_file() or not os.path.lexists(str(runtime)):
             return [_item('content:portable-repair', 'Content установлен не полностью; ремонт после завершения установки.', 'skipped:content-incomplete')]
-    fixes = spec['fixes']
-    states = _file_states(current, fixes, home)
+    # A new copy always links the installer's own version: an earlier patch's copy is replaced, never edited.
+    source = origin if previous else current
+    states = _file_states(source, spec['fixes'], home)
+    kept = []
+    for relative in spec['optional']:
+        state = states.get(relative, ('missing', None))[0]
+        if state in {'missing', 'edited'}:
+            states.pop(relative, None)
+            if state == 'edited':
+                kept.append(relative)  # The learner's own edit is linked as is.
+    fixes = {r: spec['fixes'][r] for r in states}
     bugs = ', '.join(sorted({fixes[r][0] for r, (s, _) in states.items() if s == 'applicable'}))
     model = _model_state(current, home) if kind == 'portable' else None
     want_model = model == 'missing' and download
+    additions = _cutout_additions(source, states, home) if spec['additions'] else {}
     code = 'content:portable-repair' if kind == 'portable' else 'content:mac-repair'
     label = ('Карусель: тема client (BUG 0008); PDF кадра урока (BUG 0009); модель U2Net (BUG 0010)' if kind == 'portable'
-             else 'doc.sh и pip.sh: временные файлы каждого запуска отдельно (OBS 0008)')
+             else 'doc.sh и pip.sh: временные файлы каждого запуска отдельно (OBS 0008); '
+                  'вырезание человека: готовая программа person-cutout и Python из Content/.venv (BUG 0013)')
+    if kept:
+        label += '. Изменённый вручную ' + ', '.join(kept) + ' сохранён как есть'
     items = []
     copy_ok = False
     if on_copy:
         bad = [r for r, (s, _) in states.items() if s != 'fixed']
+        # The added binary is part of the copy: a deleted or replaced one is an edited copy.
+        for relative, data in additions.items():
+            mine = current / relative
+            try:
+                _plain(mine, home)
+                ok = mine.is_file() and _file_sha(mine) == sha(data)
+            except (ValueError, OSError):
+                ok = False
+            if not ok:
+                bad.append(relative)
         if bad:
-            items.append(_item(code, label + '. Починенная копия ' + name + ' изменена; не трогается.', 'skipped:repair-copy-edited'))
+            items.append(_item(code, label + '. Починенная копия ' + name + ' изменена (' + ', '.join(sorted(bad)) + '); не трогается. '
+                               'Чтобы починить заново, верните active.json на ' + base + ' и удалите каталог ' + name + '.',
+                               'skipped:repair-copy-edited'))
         else:
             copy_ok = True
             items.append(_item(code, label + '. Работает починенная копия ' + name + '.', 'unchanged'))
     elif any(s in {'edited', 'missing', 'linked'} for s, _ in states.values()):
         items.append(_item(code, label + '. Файлы версии изменены вручную или неизвестны; ничего не тронуто.', 'skipped:edited'))
-    elif not bugs and not want_model:
+    elif previous and not _copy_intact(origin, current, {r: (fragment_fix(d, fixes[r][1]) if r in spec['previous_fixes'] and s == 'applicable' else d)
+                                                         for r, (s, d) in states.items()}, spec, skip=(CUTOUT_RELATIVE,)):
+        items.append(_item(code, label + '. Прежняя починенная копия ' + active + ' изменена; ничего не тронуто.', 'skipped:repair-copy-edited'))
+    elif not bugs and not want_model and not additions:
         items.append(_item(code, label + '. Уже исправлено.', 'unchanged'))
     else:
         expected = {r: (fragment_fix(d, fixes[r][1]) if s == 'applicable' else d) for r, (s, d) in states.items()}
         if os.path.lexists(str(copy)):
-            if _copy_intact(current, copy, expected, spec):
+            if _copy_intact(source, copy, expected, spec, additions):
                 copy_ok = True
 
                 def switch():
-                    if not _copy_intact(current, copy, expected, spec):
+                    if not _copy_intact(source, copy, expected, spec, additions):
                         raise ValueError('Concurrent Content edit preserved')
                     _switch(pointer, home, before, name)
                 items.append(_item(code, label + '. Починенная копия ' + name + ' уже есть; переключить active.json на неё.',
                                    'needs-fix', [pointer], switch))
             else:
-                items.append(_item(code, label + '. Каталог ' + name + ' отличается от ожидаемой копии; ничего не тронуто.',
+                items.append(_item(code, label + '. Каталог ' + name + ' отличается от ожидаемой копии; ничего не тронуто. '
+                                   'Если он не нужен, удалите его, и повтор ремонта соберёт копию заново.',
                                    'skipped:repair-copy-edited'))
         else:
             try:
-                _entries(current, spec['links'])
+                _entries(source, spec['links'])
             except (ValueError, OSError):
                 items.append(_item(code, label + '. В версии есть ссылка или особый объект; копия не создаётся.', 'skipped:linked-path'))
             else:
@@ -461,23 +595,28 @@ def _engine(home, project, kind, download, opener, search_path):
 
                 def build():
                     for relative, (_, data) in states.items():
-                        if _read(current / relative, home) != data:
+                        if _read(source / relative, home) != data:
                             raise ValueError('Concurrent Content edit preserved')
                     if _read(pointer, home, 64 * 1024) != before:
                         raise ValueError('Concurrent Content edit preserved')
-                    outcome = _build_copy(current, releases, name, expected, spec, home)
+                    outcome = _build_copy(source, releases, name, expected, spec, home, additions)
                     if outcome:
                         return outcome
                     _switch(pointer, home, before, name)
-                items.append(_item(code, label + ': ' + (bugs or 'BUG 0010') + '. Создать починенную копию ' + name +
-                                   ' (жёсткие ссылки на ' + active + ', исправленные файлы новые) и переключить active.json.',
+                items.append(_item(code, label + ': ' + (', '.join(x for x in [bugs, 'BUG 0013' if additions and 'BUG 0013' not in bugs else '']
+                                                                  if x) or 'BUG 0010') + '. Создать починенную копию ' + name +
+                                   ' (жёсткие ссылки на ' + base + ', исправленные и добавленные файлы новые) и переключить active.json.',
                                    'needs-fix', [pointer], build))
     if kind == 'portable':
         if not on_copy and copy.is_dir():
             model = _model_state(copy, home)  # The model lives in the copy, never in <v>.
         items.append(_model_item(home, current, copy, on_copy, copy_ok, model, download, opener))
     else:
-        items += [i for i in (_shared_panel_item(home, current), _cutout_item(home, current, search_path)) if i is not None]
+        # The venv only helps a script that reads it: the fixed copy (built now or
+        # already active) or a learner's own edit that already points there.
+        will_fix = items[0]['status'] == 'needs-fix' and 'person-cutout.sh' in states
+        items += [i for i in (_shared_panel_item(home, current),
+                              _cutout_item(home, project, current, search_path, hermes, will_fix)) if i is not None]
     return items
 
 
@@ -632,52 +771,169 @@ def _shared_panel_item(home, engine):
                  'изоляция параллельных запусков требует новой сборки движка (OBS 0008).', 'skipped:needs-native-build')
 
 
-def _developer_tools():
-    """True only with Command Line Tools/Xcode; never runs a /usr/bin shim that opens the installer dialog."""
-    try:
-        result = subprocess.run(['/usr/bin/xcode-select', '-p'], capture_output=True, text=True, timeout=15)
-    except (OSError, subprocess.TimeoutExpired):
-        return False
-    return result.returncode == 0 and Path(result.stdout.strip() or '/nonexistent').is_dir()
-
-
 def _cutout_python_ready(python):
     env = {k: v for k, v in os.environ.items() if k.upper() not in {'PYTHONPATH', 'PYTHONHOME', 'VIRTUAL_ENV'}}
     try:
         return subprocess.run([python, '-I', '-B', '-c', 'import PIL, numpy, cv2'], capture_output=True,
-                              env=env, timeout=60).returncode == 0
+                              env=env, timeout=120).returncode == 0
     except (OSError, subprocess.TimeoutExpired):
         return False
 
 
-def _cutout_item(home, engine, search_path):
-    script, clean = engine / 'person-cutout.sh', engine / 'tools/clean-cutout.py'
-    binary, source = engine / 'tools/person-cutout', engine / 'tools/person-cutout.swift'
+PM_UV = ("import sys; sys.path.insert(0, ''); from pm import uv_launcher; "
+         "path = uv_launcher('uv'); print(path or '')")
+
+
+def _pm_uv(hermes):
+    """Hermes 0.23 PM's verified uv, asked the way setup-tariff-content.py asks it."""
+    code, python = hermes / 'hermes-agent', hermes / 'hermes-agent/venv/bin/python'
+    if not python.is_file():
+        return None
+    env = {k: v for k, v in os.environ.items() if k.upper() not in {'PYTHONPATH', 'PYTHONHOME', 'VIRTUAL_ENV'}}
+    env['HERMES_HOME'] = str(hermes)
     try:
-        for path in (script, clean, binary, source):
-            _plain(path, home)
-        if not script.is_file() or CUTOUT_CALL not in _read(script, home):
+        result = subprocess.run([str(python), '-B', '-c', PM_UV], cwd=str(code), env=env, capture_output=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    lines = result.stdout.decode('utf-8', 'replace').strip().splitlines() if result.returncode == 0 else []
+    return Path(lines[-1]) if lines and lines[-1] else None
+
+
+def _uv(home, search_path, hermes=None):
+    """uv as Content's own setup finds it: Hermes PM (0.23), the Hermes venv, the
+    Hermes bin, ~/.local/bin, then PATH. Executed, never written."""
+    hermes = Path(hermes) if hermes else home / '.hermes'
+    found = shutil.which('uv', path=search_path if search_path is not None else os.environ.get('PATH', ''))
+    candidates = [lambda: _pm_uv(hermes), lambda: hermes / 'hermes-agent/venv/bin/uv', lambda: hermes / 'bin/uv',
+                  lambda: home / '.local/bin/uv', lambda: Path(found) if found else None]
+    for candidate in candidates:
+        path = candidate()
+        if path is not None and path.is_file() and os.access(str(path), os.X_OK):
+            return str(path)
+    return None
+
+
+def _macos_supported():
+    arch = {'arm64': 'arm64', 'aarch64': 'arm64', 'x86_64': 'x86_64'}.get(platform.machine().lower())
+    major = (platform.mac_ver()[0] or '').split('.')[0]
+    return bool(arch) and major.isdigit() and int(major) >= CUTOUT_MIN_MACOS[arch]
+
+
+STALE_VENV = re.compile(r'\.venv\.tmp-[0-9a-f]{12}')
+NETWORK_HINTS = ('failed to download', 'error sending request', 'dns error', 'failed to fetch', 'connection',
+                 'timed out', 'could not connect', 'network', 'tls', 'certificate')
+WHEEL_HINTS = ('no wheels with a matching platform tag', "doesn't have a source distribution or wheel",
+               'no solution found', 'not supported on this platform', 'no matching distribution')
+
+
+def _uv_outcome(result):
+    text = (result.stderr or b'').decode('utf-8', 'replace').lower()
+    if any(h in text for h in WHEEL_HINTS):
+        return 'unavailable:no-compatible-wheel'
+    if any(h in text for h in NETWORK_HINTS):
+        return 'unavailable:network'
+    return 'unavailable:cutout-runtime'
+
+
+def create_cutout_venv(project, home, uv):
+    """Content/.venv from CPython 3.12 and hash-pinned wheels; built aside, then renamed.
+
+    Returns None when the environment is in place, or an ``unavailable:*`` status
+    with nothing left behind (offline, no wheel for this macOS, failed runtime)."""
+    venv = project / '.venv'
+    temporary = project / ('.venv.tmp-' + uuid.uuid4().hex[:12])
+    _plain(venv, home); _plain(temporary, home)
+    if os.path.lexists(str(venv)):
+        raise ValueError('Concurrent Content edit preserved')
+    for stale in project.iterdir():
+        # Only this function's own leftovers of an interrupted run (power loss, kill).
+        if STALE_VENV.fullmatch(stale.name) and stale.is_dir() and not stale.is_symlink():
+            shutil.rmtree(str(stale), True)
+    env = {k: v for k, v in os.environ.items() if k.upper() not in {'PYTHONPATH', 'PYTHONHOME', 'VIRTUAL_ENV', 'CONDA_PREFIX'}}
+    store = home / '.local/share/infobiz-content/python'  # The store Linux Content already uses.
+    _plain(store, home)
+    env.update(UV_PYTHON_INSTALL_DIR=str(store), UV_NO_CONFIG='1')
+    work = Path(tempfile.mkdtemp(prefix='content-cutout-'))
+    try:
+        requirements = work / 'requirements.txt'
+        requirements.write_text(CUTOUT_REQUIREMENTS, encoding='utf-8')
+        # --relocatable: activate and entry-point scripts use relative paths, so the
+        # environment built aside keeps working under its final name.
+        steps = [[uv, 'venv', '--python', CUTOUT_PYTHON, '--managed-python', '--relocatable', str(temporary)],
+                 [uv, 'pip', 'install', '--python', str(temporary / 'bin/python'), '--require-hashes',
+                  '--only-binary', ':all:', '--no-deps', '-r', str(requirements)]]
+        for args in steps:
+            try:
+                result = subprocess.run(args, cwd=str(work), env=env, capture_output=True, timeout=1800)
+            except subprocess.TimeoutExpired:
+                return 'unavailable:network'
+            except OSError:
+                return 'unavailable:cutout-runtime'
+            if result.returncode:
+                return _uv_outcome(result)
+        if not _cutout_python_ready(str(temporary / 'bin/python')):
+            return 'unavailable:cutout-runtime'
+        _plain(venv, home)
+        if os.path.lexists(str(venv)):
+            raise ValueError('Concurrent Content edit preserved')
+        os.rename(str(temporary), str(venv))
+        if not _cutout_python_ready(str(venv / 'bin/python')):
+            shutil.rmtree(str(venv))
+            return 'unavailable:cutout-runtime'
+        return None
+    finally:
+        shutil.rmtree(str(work), True)
+        if os.path.lexists(str(temporary)) and not temporary.is_symlink():
+            shutil.rmtree(str(temporary), True)
+
+
+def _active_script_uses_venv(home, project):
+    """Does the person-cutout.sh of the version active.json names right now read Content/.venv?"""
+    try:
+        version, _ = _version(project / ENGINES['mac']['pointer'], home)
+        if version is None:
+            return False
+        script = project / ENGINES['mac']['releases'] / version / 'person-cutout.sh'
+        _plain(script, home)
+        return script.is_file() and b'.venv' in _read(script, home)
+    except (ValueError, OSError):
+        return False
+
+
+def _cutout_item(home, project, engine, search_path, hermes=None, will_fix=False):
+    """BUG 0013: the Python half of person-cutout.sh (clean-cutout.py needs PIL/numpy/cv2)."""
+    script = engine / 'person-cutout.sh'
+    try:
+        _plain(script, home)
+        if not script.is_file():
             return None
+        data = _read(script, home)
+        venv = project / '.venv'
+        _plain(venv, home)
     except ValueError:
         return None
+    if CUTOUT_CALL not in data and b'.venv' not in data:
+        return None
     code = 'content:mac-cutout-python'
-    tools = None
-    missing = []
-    built = binary.is_file() and os.access(str(binary), os.X_OK) and not (source.is_file() and source.stat().st_mtime > binary.stat().st_mtime)
-    if not built:
-        tools = _developer_tools()
-        if not tools:
-            missing.append('готовая программа person-cutout (в пакете её нет, swiftc недоступен)')
-    python = shutil.which('python3', path=search_path if search_path is not None else os.environ.get('PATH', ''))
-    if python and os.path.realpath(python).startswith('/usr/bin/'):
-        tools = _developer_tools() if tools is None else tools
-        if not tools:
-            python = None  # The system shim would open the Command Line Tools dialog.
-    if not python:
-        missing.append('python3')
-    elif not _cutout_python_ready(python):
-        missing.append('Pillow/NumPy/OpenCV в python3')
-    if not missing:
-        return _item(code, 'Вырезание человека на Mac: python3 с PIL/numpy/cv2 и программа person-cutout доступны (BUG 0013).', 'unchanged')
-    return _item(code, 'Вырезание человека на Mac (person-cutout.sh) не работает: нет ' + ', '.join(missing) +
-                 '. Нужна отдельная среда Content в новой поставке; патч ничего не ставит (BUG 0013).', 'skipped:needs-content-runtime')
+    detail = 'Вырезание человека на Mac: Pillow/NumPy/OpenCV в Documents/Content/.venv (CPython ' + CUTOUT_PYTHON + ', закреплённые колёса, BUG 0013).'
+    if os.path.lexists(str(venv)):
+        if venv.is_dir() and not venv.is_symlink() and _cutout_python_ready(str(venv / 'bin/python')):
+            return _item(code, detail + ' Среда на месте.', 'unchanged')
+        return _item(code, detail + ' Content/.venv уже есть, но без нужных библиотек; не трогается '
+                     '(удалите эту папку, и повтор ремонта создаст среду заново).', 'skipped:venv-preserved')
+    if not will_fix and b'.venv' not in data:
+        return _item(code, detail + ' Активный person-cutout.sh не починен (копия Content не создана) и эту среду не читает; '
+                     'она не ставится.', 'skipped:script-not-repaired')
+    if not _macos_supported():
+        return _item(code, detail + ' Для этих колёс нужна macOS 13 (Apple Silicon) или 14 (Intel); ничего не ставится.',
+                     'skipped:macos-too-old')
+    uv = _uv(home, search_path, hermes)
+    if not uv:
+        return _item(code, detail + ' Нет uv из установки Hermes; нужна штатная установка.', 'skipped:uv-missing')
+
+    def apply():
+        # Runs after the copy item: the script now active must be the one that reads the venv.
+        if not _active_script_uses_venv(home, project):
+            return 'skipped:script-not-repaired'
+        return create_cutout_venv(project, home, uv)
+    return _item(code, detail + ' Создать среду (сеть: PyPI и сборка CPython от Astral через uv).', 'needs-fix', [], apply)

@@ -467,7 +467,7 @@ class RepairTests(unittest.TestCase):
             for name,digest in manifest['files'].items():self.assertEqual(repair.sha(archive.read(name)),digest)
     def test_verify_current_windows_exits_zero(self):
         f=self.fixture('Windows');f.run(True)
-        state=json.loads((f.control/'tariff-files.json').read_text());state['revision']='agents-release-20261108.1'
+        state=json.loads((f.control/'tariff-files.json').read_text());state['revision']='agents-release-20261110.1'
         write(f.control/'tariff-files.json',json.dumps(state))
         for name in repair.PACKAGE_HELPERS:write(f.control/'post-install'/name,'fixture')
         for name in ['carousel-style-brief','motion-brief-builder']:write(f.profiles/'designer/skills'/name/'SKILL.md','fixture')
@@ -833,7 +833,7 @@ class RepairTests(unittest.TestCase):
             write(p/'SOUL.md','agents-profile-identity-v1 '+identity)
             write(p/'AGENTS.md','agents-profile-identity-v1 '+identity)
             files[name+'/SOUL.md']=repair.sha((p/'SOUL.md').read_bytes())
-        write(home/'InfobizAgents/control/tariffs/tariff-files.json',json.dumps({'files':files,'revision':'agents-release-20261108.1'}))
+        write(home/'InfobizAgents/control/tariffs/tariff-files.json',json.dumps({'files':files,'revision':'agents-release-20261110.1'}))
         write(home/'InfobizAgents/install.log','fixture')
         return home
     def run_native_fixture(self,home,mode,*args):
@@ -920,7 +920,7 @@ class RepairTests(unittest.TestCase):
                     data=archive.extractfile(member).read();write(f.profiles/name,data);f.files[name]=repair.sha(data)
         for name in helpers:write(f.control/'post-install'/name,'fixture')
         r=repair.Repair(f.home,f.install,'Darwin',f.hermes);r.files=f.files;r.names=list(repair.NAMES)
-        for revision,expected in [('agents-native-content-20261103.1','needs-platform-update'),('agents-release-20261105.1','needs-platform-update'),('agents-release-20261105.2','needs-platform-update'),('agents-release-20261105.3','needs-platform-update'),('agents-release-20261106.1','needs-platform-update'),('agents-release-20261108.1','unchanged')]:
+        for revision,expected in [('agents-native-content-20261103.1','needs-platform-update'),('agents-release-20261105.1','needs-platform-update'),('agents-release-20261105.2','needs-platform-update'),('agents-release-20261105.3','needs-platform-update'),('agents-release-20261106.1','needs-platform-update'),('agents-release-20261108.1','needs-platform-update'),('agents-release-20261110.1','unchanged')]:
             r.state={'revision':revision};r.findings=[];before=tree(f.home);r.skills()
             findings={f['code']:f for f in r.findings}
             self.assertEqual(findings['managed-skills']['status'],expected)
@@ -958,7 +958,7 @@ class RepairTests(unittest.TestCase):
 
     def test_non_utf8_warning_alone_does_not_change_exit(self):
         f=self.fixture('Windows');f.run(True)
-        state=repair.json_file(f.control/'tariff-files.json');state['revision']='agents-release-20261108.1';write(f.control/'tariff-files.json',json.dumps(state))
+        state=repair.json_file(f.control/'tariff-files.json');state['revision']='agents-release-20261110.1';write(f.control/'tariff-files.json',json.dumps(state))
         for name in repair.PACKAGE_HELPERS:write(f.control/'post-install'/name,'fixture')
         write(f.install/'control/watchdog.js','fixture');write(f.install/'control/webshell-runtime.json','{"recoveryEnabled":true}')
         path=f.profiles/'tech/SOUL.md';path.write_bytes('Личный текст'.encode('cp1251'));before=tree(f.home)

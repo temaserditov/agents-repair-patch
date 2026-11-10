@@ -277,10 +277,14 @@ class Repair:
         self.security = load('security-tools')
         self.skill_repairs = load('student-skill-repairs')
         # Validate the complete bundle even if optional reporting is disabled.
-        for name in ['agents-diagnose.mjs', 'profile-probe.py']:
+        for name in ['agents-diagnose.mjs', 'profile-probe.py', 'bin/person-cutout']:
             plain(HERE/'vendor'/name)
             if not (HERE/'vendor'/name).is_file():
                 raise ValueError('Incomplete repair bundle')
+        try:
+            load('content-repairs').check_bundle()  # FIX_0586: the shipped person-cutout is the reviewed one.
+        except RuntimeError:
+            raise ValueError('Incomplete repair bundle') from None
         self.yaml = self.designer.yaml
 
     def text(self, path, code, limit=8*1024*1024):
@@ -745,12 +749,13 @@ class Repair:
             self.full_tools(current)
 
     def content(self):
-        """TASK48: Content defects (BUG 0008/0009/0010, OBS 0008), see vendor/content-repairs.py.
+        """TASK48: Content defects (BUG 0008/0009/0010/0013, OBS 0008), see vendor/content-repairs.py.
         Never edits the installed version directory: the platform update reinstalls it."""
         # plan() never downloads; verify must still see a missing model as an
         # unfinished repair (mutation reports it unfixable without writing).
         items = load('content-repairs').plan(self.home, self.system, download=True,
-                                             search_path=None if self.system=='Windows' else self.gateway_path())
+                                             search_path=None if self.system=='Windows' else self.gateway_path(),
+                                             hermes=self.hermes)
         for item in items:
             status = item['status']
             if status!='needs-fix':

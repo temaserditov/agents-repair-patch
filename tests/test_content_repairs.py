@@ -31,6 +31,7 @@ TARBALL = ROOT/'apps/lms/installer-assets/agents/agents-tier-3-agents-release-20
 SETUP = ROOT/'installer/packages/shared/setup-tariff-content.py'
 VERSION = 'agents-release-20261108.1'
 COPY = VERSION+'-repair1'
+MAC_COPY = VERSION+'-repair2'
 # SHA256 of the owner's verified address-level repair (repair-student-content-case.py) of the same bytes.
 OWNER_CONTRACT = 'e5c9ddb95b33edf86781ed1f87885f7b5c2ff582fa088ea90d1b629bcae05826'
 OWNER_BOARD = '3b2e132d2e5020ffb17a6d71acf2e82d9c1ebdbe46b7c5e086bf9704f8b6079e'
@@ -405,15 +406,18 @@ class MacRepairCopy(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
         self.home, self.project, self.engine = mac_fixture(self.root)
-        self.copy = self.engine.with_name(COPY)
+        self.copy = self.engine.with_name(MAC_COPY)
         self.pointer = self.project/'tools/swift-design-engine/active.json'
+        self.uv = self.root/'hermes-uv'
 
     def tearDown(self):
         self.tmp.cleanup()
 
-    def plan(self, ready=False, search_path=None):
-        with patch.object(content, '_developer_tools', return_value=ready), patch.object(content, '_cutout_python_ready', return_value=ready):
-            return by_code(content.plan(self.home, 'Darwin', search_path=os.environ.get('PATH', '') if search_path is None else search_path))
+    def plan(self, ready=False, uv=True, supported=True):
+        with patch.object(content, '_cutout_python_ready', return_value=ready), \
+                patch.object(content, '_uv', return_value=str(self.uv) if uv else None), \
+                patch.object(content, '_macos_supported', return_value=supported):
+            return by_code(content.plan(self.home, 'Darwin', search_path=''))
 
     def test_copy_isolates_tmp_reinstall_passes_and_statuses(self):
         before = tree(self.home)
@@ -422,17 +426,25 @@ class MacRepairCopy(unittest.TestCase):
         self.assertEqual(items['content:mac-repair']['status'], 'needs-fix')
         self.assertEqual(items['content:mac-repair']['paths'], [self.pointer])
         self.assertEqual(items['content:mac-lesson-tmp']['status'], 'skipped:needs-native-build')
-        self.assertEqual(items['content:mac-cutout-python']['status'], 'skipped:needs-content-runtime')
+        self.assertEqual(items['content:mac-cutout-python']['status'], 'needs-fix')
+        self.assertIn('BUG 0013', items['content:mac-repair']['detail'])
         self.assertIsNone(items['content:mac-repair']['apply']())
         self.assertEqual(tree(self.engine), {k[len('Documents/Content/tools/swift-design-engine/releases/'+VERSION+'/'):]: v for k, v in before.items()
                                              if k.startswith('Documents/Content/tools/swift-design-engine/releases/'+VERSION+'/')})
-        self.assertEqual(self.pointer.read_text(), json.dumps({'version': COPY})+'\n')
-        for name in ['doc.sh', 'pip.sh']:
+        self.assertEqual(self.pointer.read_text(), json.dumps({'version': MAC_COPY})+'\n')
+        for name in ['doc.sh', 'pip.sh', 'person-cutout.sh']:
             path = self.copy/name
             self.assertEqual(path.stat().st_mode & 0o777, 0o755)
             self.assertEqual(subprocess.run(['bash', '-n', str(path)]).returncode, 0)
         self.assertNotIn(b'/tmp/doc-page', (self.copy/'doc.sh').read_bytes()); self.assertNotIn(b'/tmp/pip-', (self.copy/'pip.sh').read_bytes())
         self.assertEqual((self.copy/'board.swift').stat().st_ino, (self.engine/'board.swift').stat().st_ino)
+        binary = self.copy/'tools/person-cutout'
+        self.assertEqual(binary.read_bytes(), (BUNDLE/'vendor/bin/person-cutout').read_bytes())
+        self.assertEqual(binary.stat().st_mode & 0o777, 0o755)
+        self.assertFalse((self.engine/'tools/person-cutout').exists(), 'the installer version gets no binary')
+        script = (self.copy/'person-cutout.sh').read_bytes()
+        self.assertIn(b'if [[ ! -x "$BIN" ]]; then', script); self.assertNotIn(b'-ot "$SRC"', script)
+        self.assertIn(b'.venv/bin/python', script)
         self.assertEqual(list((self.copy/'out').iterdir()), [], 'generated output is not linked into the copy')
         self.assertEqual(self.plan()['content:mac-repair']['status'], 'unchanged')
         reinstall_check(package(), self.project, VERSION, 'Darwin')
@@ -440,13 +452,247 @@ class MacRepairCopy(unittest.TestCase):
         again = self.plan()['content:mac-repair']
         self.assertIn('уже есть', again['detail'])
         again['apply']()
-        self.assertEqual(sorted(p.name for p in self.engine.parent.iterdir()), [VERSION, COPY])
+        self.assertEqual(sorted(p.name for p in self.engine.parent.iterdir()), [VERSION, MAC_COPY])
         self.assertEqual(self.plan()['content:mac-repair']['status'], 'unchanged')
 
-    def test_cutout_ready_reports_unchanged(self):
+    def test_cutout_venv_statuses(self):
+        self.assertEqual(self.plan(uv=False)['content:mac-cutout-python']['status'], 'skipped:uv-missing')
+        self.assertEqual(self.plan(supported=False)['content:mac-cutout-python']['status'], 'skipped:macos-too-old')
+        (self.project/'.venv/bin').mkdir(parents=True)
+        self.assertEqual(self.plan()['content:mac-cutout-python']['status'], 'skipped:venv-preserved')
+        self.assertEqual(self.plan(ready=True)['content:mac-cutout-python']['status'], 'unchanged')
+
+    def fake_uv(self, venv_exit=0, pip_exit=0, stderr=''):
+        """uv double: `venv` makes bin/python (a shell that answers the import probe), `pip` records its argv."""
+        log = self.root/'uv.log'
+        write(self.uv, textwrap.dedent(f'''\
+            #!/bin/bash
+            echo "$@" >> {log}
+            if [ "$1" = venv ]; then
+              [ {venv_exit} = 0 ] || {{ echo {stderr!r} >&2; exit {venv_exit}; }}
+              d="${{@: -1}}"; mkdir -p "$d/bin"; printf '#!/bin/sh\\nexit 0\\n' > "$d/bin/python"; chmod 755 "$d/bin/python"; exit 0
+            fi
+            for a in "$@"; do case "$a" in *requirements.txt) cp "$a" {self.root/'requirements.seen'};; esac; done
+            [ {pip_exit} = 0 ] || {{ echo {stderr!r} >&2; exit {pip_exit}; }}
+            '''), 0o755)
+        return log
+
+    def cutout_item(self, repaired=True):
+        if repaired and not self.copy.exists():
+            self.plan()['content:mac-repair']['apply']()   # agents_repair applies the copy first
+        with patch.object(content, '_uv', return_value=str(self.uv)), patch.object(content, '_macos_supported', return_value=True):
+            return by_code(content.plan(self.home, 'Darwin', search_path=''))['content:mac-cutout-python']
+
+    def test_cutout_venv_is_built_aside_from_pinned_hashes_and_repeat_is_unchanged(self):
+        log = self.fake_uv()
+        item = self.cutout_item()
+        self.assertEqual(item['status'], 'needs-fix'); self.assertEqual(item['paths'], [])
+        self.assertIsNone(item['apply']())
+        self.assertTrue((self.project/'.venv/bin/python').is_file())
+        self.assertEqual([p.name for p in self.project.iterdir() if p.name.startswith('.venv.tmp-')], [])
+        calls = log.read_text().splitlines()
+        self.assertTrue(calls[0].startswith('venv --python '+content.CUTOUT_PYTHON+' --managed-python --relocatable '+str(self.project)+'/.venv.tmp-'))
+        self.assertIn('--require-hashes', calls[1]); self.assertIn('--only-binary :all:', calls[1]); self.assertIn('--no-deps', calls[1])
+        seen = (self.root/'requirements.seen').read_text()
+        self.assertEqual(seen, content.CUTOUT_REQUIREMENTS)
+        for line in seen.splitlines():
+            self.assertRegex(line, r'^[a-z-]+==[0-9.]+( --hash=sha256:[0-9a-f]{64})+$')
+        self.assertEqual(self.cutout_item()['status'], 'unchanged')
+
+    def test_cutout_venv_offline_or_without_wheel_leaves_nothing(self):
+        for kwargs, expected in [({'venv_exit': 2, 'stderr': 'error: Failed to download https://github.com/... error sending request'}, 'unavailable:network'),
+                                 ({'pip_exit': 1, 'stderr': "Because opencv-python-headless==5.0.0.93 has no wheels with a matching platform tag"}, 'unavailable:no-compatible-wheel'),
+                                 ({'pip_exit': 1, 'stderr': 'boom'}, 'unavailable:cutout-runtime')]:
+            with self.subTest(expected=expected):
+                self.fake_uv(**kwargs)
+                item = self.cutout_item()
+                before = tree(self.home)
+                self.assertEqual(item['apply'](), expected)
+                self.assertEqual(tree(self.home), before)
+                self.assertFalse(os.path.lexists(str(self.project/'.venv')))
+                self.assertEqual([p.name for p in self.project.iterdir() if p.name.startswith('.venv')], [])
+
+    def run_cutout(self, venv=True):
+        """The repaired person-cutout.sh with stand-ins for Vision and clean-cutout.py; swiftc must not run."""
+        self.plan()['content:mac-repair']['apply']()
+        stubs = self.root/'stubs'; calls = self.root/'cutout.log'
+        write(stubs/'swiftc', '#!/bin/sh\necho swiftc >> '+str(calls)+'\nexit 9\n', 0o755)
+        write(stubs/'python3', '#!/bin/sh\necho system-python >> '+str(calls)+'\ncp "$2" "$3"\n', 0o755)
+        if venv:
+            write(self.project/'.venv/bin/python', '#!/bin/sh\necho venv-python >> '+str(calls)+'\ncp "$2" "$3"\n', 0o755)
+        binary = self.copy/'tools/person-cutout'
+        binary.unlink(); write(binary, '#!/bin/sh\necho vision >> '+str(calls)+'\ncp "$1" "$2"\n', 0o755)
+        write(self.root/'in.png', b'png')
+        env = {**os.environ, 'PATH': str(stubs)+':/usr/bin:/bin', 'TMPDIR': str(self.root)}
+        result = subprocess.run(['bash', str(self.copy/'person-cutout.sh'), str(self.root/'in.png'), str(self.root/'out.png')],
+                                env=env, capture_output=True, text=True, timeout=60)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((self.root/'out.png').read_bytes(), b'png')
+        return calls.read_text().split()
+
+    def test_repaired_script_prefers_content_venv_and_never_compiles(self):
+        self.assertEqual(self.run_cutout(venv=True), ['vision', 'venv-python'])
+
+    def test_repaired_script_falls_back_to_python3_without_venv(self):
+        self.assertEqual(self.run_cutout(venv=False), ['vision', 'system-python'])
+
+    def test_learner_built_binary_is_replaced_in_the_copy_and_edited_script_is_kept(self):
+        write(self.engine/'tools/person-cutout', b'#!/bin/sh\n', 0o755)   # swiftc on the learner's own Mac
+        self.assertIsNone(self.plan()['content:mac-repair']['apply']())
+        self.assertEqual((self.copy/'tools/person-cutout').read_bytes(), (BUNDLE/'vendor/bin/person-cutout').read_bytes())
+        self.assertEqual((self.engine/'tools/person-cutout').read_bytes(), b'#!/bin/sh\n', '<v> keeps its own artefact')
+        self.assertEqual(self.plan()['content:mac-repair']['status'], 'unchanged')
+        self.tearDown(); self.setUp()
+        edited = (self.engine/'person-cutout.sh').read_bytes().replace(content.CUTOUT_CALL, b'"$ROOT/../../../../.venv/bin/python" "$CLEAN" "$TMP_DIR/raw.png" "$2"\n')
+        write(self.engine/'person-cutout.sh', edited, 0o755)
+        item = self.plan()['content:mac-repair']
+        self.assertEqual(item['status'], 'needs-fix'); self.assertIn('сохранён как есть', item['detail'])
+        self.assertIsNone(item['apply']())
+        self.assertEqual((self.copy/'person-cutout.sh').stat().st_ino, (self.engine/'person-cutout.sh').stat().st_ino)
+        self.assertNotIn(b'.venv', (self.copy/'doc.sh').read_bytes()); self.assertNotIn(b'/tmp/doc-page', (self.copy/'doc.sh').read_bytes())
+        self.assertFalse((self.copy/'tools/person-cutout').exists(), 'no binary for a script the patch does not own')
+        self.assertEqual(self.plan()['content:mac-repair']['status'], 'unchanged')
+
+    def test_reinstall_then_self_built_binary_switches_back_to_the_copy(self):
+        self.plan()['content:mac-repair']['apply']()
+        reinstall_pointer(self.project, 'tools/swift-design-engine')
+        write(self.engine/'tools/person-cutout', b'#!/bin/sh\n# swiftc output\n', 0o755)
+        item = self.plan()['content:mac-repair']
+        self.assertEqual(item['status'], 'needs-fix'); self.assertIn('уже есть', item['detail'])
+        self.assertIsNone(item['apply']())
+        self.assertEqual(json.loads(self.pointer.read_text()), {'version': MAC_COPY})
+        self.assertEqual(self.plan()['content:mac-repair']['status'], 'unchanged')
+
+    def test_deleted_or_replaced_binary_in_the_active_copy_is_an_edited_copy(self):
+        self.plan()['content:mac-repair']['apply']()
+        binary = self.copy/'tools/person-cutout'
+        for change in ['replace', 'delete']:
+            with self.subTest(change=change):
+                binary.unlink(missing_ok=True) if sys.version_info >= (3, 8) else None
+                if change == 'replace':
+                    write(binary, b'#!/bin/sh\n', 0o755)
+                item = self.plan()['content:mac-repair']
+                self.assertEqual(item['status'], 'skipped:repair-copy-edited')
+                self.assertIn('tools/person-cutout', item['detail']); self.assertIn('удалите каталог', item['detail'])
+
+    def test_no_venv_when_the_copy_is_not_built(self):
+        self.fake_uv()
+        write(self.engine/'doc.sh', b'#!/bin/bash\n# my own\n', 0o755)   # copy skipped:edited
+        items = self.plan()
+        self.assertEqual(items['content:mac-repair']['status'], 'skipped:edited')
+        self.assertEqual(items['content:mac-cutout-python']['status'], 'skipped:script-not-repaired')
+        self.assertFalse(os.path.lexists(str(self.project/'.venv')))
+
+    def test_venv_apply_rechecks_that_the_active_script_reads_it(self):
+        log = self.fake_uv()
+        with patch.object(content, '_uv', return_value=str(self.uv)), patch.object(content, '_macos_supported', return_value=True):
+            items = by_code(content.plan(self.home, 'Darwin', search_path=''))
+        self.assertEqual(items['content:mac-cutout-python']['status'], 'needs-fix')
+        # The copy could not be built (no hard links here): the venv must not be created.
+        self.assertEqual(items['content:mac-cutout-python']['apply'](), 'skipped:script-not-repaired')
+        self.assertFalse(log.exists()); self.assertFalse(os.path.lexists(str(self.project/'.venv')))
+
+    def test_stale_tmp_venv_of_an_interrupted_run_is_removed(self):
+        self.fake_uv()
+        stale = self.project/'.venv.tmp-0123456789ab'; write(stale/'bin/python', b'x')
+        foreign = self.project/'.venv.tmp-mine'; foreign.mkdir()
+        self.assertIsNone(self.cutout_item()['apply']())
+        self.assertFalse(stale.exists()); self.assertTrue(foreign.is_dir(), 'only our own name pattern is removed')
+
+    def test_linked_binary_skips_only_the_copy(self):
+        os.symlink('/bin/sh', str(self.engine/'tools/person-cutout'))
+        items = self.plan()
+        self.assertEqual(items['content:mac-repair']['status'], 'skipped:linked-path')
+        self.assertNotIn('content:registration', items)
+        self.assertIn('content:mac-lesson-tmp', items)
+
+    def test_linked_swift_source_gets_no_binary(self):
+        swift = self.engine/'tools/person-cutout.swift'
+        target = self.root/'elsewhere.swift'; shutil.move(str(swift), str(target)); os.symlink(str(target), str(swift))
+        items = self.plan()
+        self.assertNotIn('content:registration', items)
+        self.assertNotEqual(items['content:mac-repair']['status'], 'needs-fix', 'a linked version is never copied')
+
+    def test_missing_or_different_bundle_binary_fails_loudly(self):
+        for data in [None, b'not the reviewed binary']:
+            with self.subTest(data=data), tempfile.TemporaryDirectory() as tmp:
+                fake = Path(tmp)/'person-cutout'
+                if data is not None:
+                    fake.write_bytes(data)
+                with patch.object(content, 'CUTOUT_BINARY', fake):
+                    with self.assertRaises(content.BundleError):
+                        content.plan(self.home, 'Darwin', search_path='')
+                    with self.assertRaises(content.BundleError):
+                        content.check_bundle()
+
+    def test_uv_is_found_like_content_setup(self):
+        hermes = self.home/'.hermes'
+        pm_uv = self.root/'pm/uv'; write(pm_uv, '#!/bin/sh\n', 0o755)
+        write(hermes/'hermes-agent/venv/bin/python', '#!/bin/sh\necho noise; echo '+str(pm_uv)+'\n', 0o755)
+        write(hermes/'hermes-agent/venv/bin/uv', '#!/bin/sh\n', 0o755)
+        write(hermes/'bin/uv', '#!/bin/sh\n', 0o755)
+        write(self.home/'.local/bin/uv', '#!/bin/sh\n', 0o755)
+        self.assertEqual(content._uv(self.home, '', hermes), str(pm_uv))
+        (hermes/'hermes-agent/venv/bin/python').unlink()
+        self.assertEqual(content._uv(self.home, '', hermes), str(hermes/'hermes-agent/venv/bin/uv'))
+        (hermes/'hermes-agent/venv/bin/uv').unlink()
+        self.assertEqual(content._uv(self.home, '', hermes), str(hermes/'bin/uv'))
+        (hermes/'bin/uv').unlink()
+        self.assertEqual(content._uv(self.home, '', hermes), str(self.home/'.local/bin/uv'))
+        (self.home/'.local/bin/uv').unlink()
+        path = self.root/'pathbin'; write(path/'uv', '#!/bin/sh\n', 0o755)
+        self.assertEqual(content._uv(self.home, str(path), hermes), str(path/'uv'))
+        self.assertIsNone(content._uv(self.home, '', hermes))
+
+    def make_previous_copy(self):
+        """The copy patch v2026.11.10.1 built: links to <v>, doc.sh/pip.sh fixed, person-cutout.sh as shipped."""
+        previous = self.engine.with_name(VERSION+'-repair1')
+        for path in sorted(self.engine.rglob('*')):
+            relative = path.relative_to(self.engine)
+            target = previous/relative
+            if path.is_dir():
+                target.mkdir(parents=True, exist_ok=True)
+            elif relative.parts[0] != 'out':
+                target.parent.mkdir(parents=True, exist_ok=True)
+                os.link(str(path), str(target))
+        (previous/'out').mkdir(exist_ok=True)
+        for name, pairs in [('doc.sh', content.DOC_FIX), ('pip.sh', content.PIP_FIX)]:
+            fixed = content.fragment_fix((self.engine/name).read_bytes(), pairs)
+            (previous/name).unlink(); write(previous/name, fixed, 0o755)
+        self.pointer.write_text(json.dumps({'version': previous.name})+'\n')
+        return previous
+
+    def test_copy_of_the_previous_patch_is_replaced_by_repair2(self):
+        previous = self.make_previous_copy()
+        before = tree(previous)
+        item = self.plan()['content:mac-repair']
+        self.assertEqual(item['status'], 'needs-fix'); self.assertIn('BUG 0013', item['detail'])
+        self.assertIsNone(item['apply']())
+        self.assertEqual(json.loads(self.pointer.read_text()), {'version': MAC_COPY})
+        self.assertEqual(tree(previous), before, 'the earlier copy stays as it was')
+        self.assertEqual((self.copy/'tools/person-cutout').read_bytes(), (BUNDLE/'vendor/bin/person-cutout').read_bytes())
+        self.assertNotIn(b'/tmp/pip-', (self.copy/'pip.sh').read_bytes())
+        self.assertEqual(self.plan()['content:mac-repair']['status'], 'unchanged')
+
+    def test_edited_previous_copy_is_left_alone(self):
+        previous = self.make_previous_copy()
+        (previous/'doc.sh').write_bytes(b'#!/bin/bash\n# my own\n')
+        before = tree(self.home)
+        self.assertEqual(self.plan()['content:mac-repair']['status'], 'skipped:repair-copy-edited')
+        self.assertEqual(tree(self.home), before)
+
+    def test_previous_copy_survives_a_binary_compiled_into_v_later(self):
+        self.make_previous_copy()
         write(self.engine/'tools/person-cutout', b'#!/bin/sh\n', 0o755)
-        bindir = self.root/'bin'; write(bindir/'python3', '#!/bin/sh\nexit 0\n', 0o755)
-        self.assertEqual(self.plan(ready=True, search_path=str(bindir))['content:mac-cutout-python']['status'], 'unchanged')
+        item = self.plan()['content:mac-repair']
+        self.assertEqual(item['status'], 'needs-fix')
+        self.assertIsNone(item['apply']())
+        self.assertEqual((self.copy/'tools/person-cutout').read_bytes(), (BUNDLE/'vendor/bin/person-cutout').read_bytes())
+
+    def test_unknown_swift_source_gets_no_binary(self):
+        write(self.engine/'tools/person-cutout.swift', b'// changed\n')
+        self.assertIsNone(self.plan()['content:mac-repair']['apply']())
+        self.assertFalse((self.copy/'tools/person-cutout').exists())
 
     def test_repaired_doc_sh_runs_in_parallel_without_shared_tmp(self):
         self.plan()['content:mac-repair']['apply']()
@@ -491,6 +737,42 @@ class MacRepairCopy(unittest.TestCase):
 
 
 class Bundle(unittest.TestCase):
+    def test_repair_refuses_to_start_with_a_different_bundle_binary(self):
+        spec = importlib.util.spec_from_file_location('repair_agents_bundle_check', BUNDLE/'agents_repair.py')
+        repair = importlib.util.module_from_spec(spec); spec.loader.exec_module(repair)
+        original = repair.load
+        def load(name):
+            module = original(name)
+            if name == 'content-repairs':
+                module.CUTOUT_BINARY = BUNDLE/'vendor/content-repairs.py'   # any other bytes
+            return module
+        with tempfile.TemporaryDirectory() as tmp, patch.object(repair, 'load', side_effect=load):
+            with self.assertRaisesRegex(ValueError, 'Incomplete repair bundle'):
+                repair.Repair(Path(tmp), Path(tmp)/'InfobizAgents', 'Darwin', Path(tmp)/'.hermes')
+
+    def test_no_learner_identifiers_in_the_public_bundle(self):
+        import re
+        for path in sorted(BUNDLE.rglob('*')):
+            if path.is_file() and '__pycache__' not in path.parts and path.suffix in {'.py', '.md', '.sh', '.ps1', '.mjs', '.json', '.yaml', '.txt'}:
+                text = path.read_text(encoding='utf-8', errors='replace')
+                # Known learner request ids are split so this file does not contain them itself.
+                known = '|'.join(['cmwae' + 'nfei', 'wsmr4' + 'qf4'])
+                self.assertIsNone(re.search(r'DIAG-[A-Z]+-[A-Z0-9]{6,}|\bcm[a-z0-9]{20,}\b|' + known, text), path.name)
+
+    def test_prebuilt_cutout_is_the_reviewed_universal_binary_for_every_released_source(self):
+        data = (BUNDLE/'vendor/bin/person-cutout').read_bytes()
+        self.assertEqual(hashlib.sha256(data).hexdigest(), content.CUTOUT_BINARY_SHA256)
+        self.assertEqual(data[:4], bytes.fromhex('cafebabe'), 'fat Mach-O (arm64 + x86_64)')
+        self.assertIsNotNone(content._prebuilt_cutout())
+        for tarball in sorted((ROOT/'apps/lms/installer-assets/agents').glob('agents-tier-3-*.tar.gz')):
+            with tarfile.open(tarball) as archive:
+                source = archive.extractfile('profile/content/swift/tools/person-cutout.swift').read()
+            self.assertEqual(hashlib.sha256(source).hexdigest(), content.CUTOUT_SOURCE_SHA256, tarball.name)
+        if sys.platform == 'darwin':
+            info = subprocess.run(['/usr/bin/lipo', '-archs', str(BUNDLE/'vendor/bin/person-cutout')], capture_output=True, text=True)
+            self.assertEqual(sorted(info.stdout.split()), ['arm64', 'x86_64'])
+            self.assertEqual(subprocess.run(['/usr/bin/codesign', '-v', str(BUNDLE/'vendor/bin/person-cutout')]).returncode, 0)
+
     def test_messages_are_fixed_literals(self):
         source = (BUNDLE/'vendor/content-repairs.py').read_text(encoding='utf-8')
         for node in ast.walk(ast.parse(source)):
