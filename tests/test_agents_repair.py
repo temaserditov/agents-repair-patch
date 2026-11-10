@@ -465,6 +465,12 @@ class RepairTests(unittest.TestCase):
             manifest=json.loads(archive.read('manifest.json'))
             self.assertEqual(set(archive.namelist()),set(manifest['files'])|{'manifest.json'})
             for name,digest in manifest['files'].items():self.assertEqual(repair.sha(archive.read(name)),digest)
+            # FIX_0588: a strict agent stops on any unfilled field; none may remain inside.
+            for name in archive.namelist():
+                text=archive.read(name).decode('utf-8','replace')
+                self.assertNotRegex(text,r'\{\{[A-Z0-9_]+\}\}',name)
+            inner=archive.read('ЗАДАНИЕ-ДЛЯ-CODEX.md').decode()
+            self.assertIn('SHA256SUMS',inner);self.assertNotIn('ZIP_SHA256',inner)
     def test_verify_current_windows_exits_zero(self):
         f=self.fixture('Windows');f.run(True)
         state=json.loads((f.control/'tariff-files.json').read_text());state['revision']='agents-release-20261110.1'

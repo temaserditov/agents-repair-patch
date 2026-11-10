@@ -1,23 +1,27 @@
 Это полное задание для Codex на моём компьютере/сервере, не просьба объяснить текст.
 Выполни работу до результата; лишних подтверждений не запрашивай.
 
-Пакет: https://github.com/temaserditov/agents-repair-patch/releases/download/v2026.11.10.2/agents-repair-patch-v2026.11.10.2.zip
-SHA-256 ZIP: {{ZIP_SHA256}}
-Исходники: https://github.com/temaserditov/agents-repair-patch/tree/v2026.11.10.2
-Версия: v2026.11.10.2. Commit: 07a90addb9104e5c8429d360198bd227ea4ea0b0.
-Не скачивай другие версии, не меняй SHA. Если остались незаполненные поля,
-остановись: опубликованный пакет ещё не указан.
+Пакет: https://github.com/temaserditov/agents-repair-patch/releases/download/v2026.11.10.3/agents-repair-patch-v2026.11.10.3.zip
+SHA-256 ZIP: указан в задании ученика и в SHA256SUMS релиза (внутри архива не хранится)
+Исходники: https://github.com/temaserditov/agents-repair-patch/tree/v2026.11.10.3
+Версия: v2026.11.10.3. Commit: 9bca80937c43b08a64bfa1abd063284625fd8a52.
+Не скачивай другие версии, не меняй SHA. Если в строках «Пакет», «Исходники»
+или «Версия» осталось поле в двойных фигурных скобках, остановись: опубликованный
+пакет ещё не указан.
 
 Цель: агенты на Hermes 0.23.0 (commit 2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19),
 все агенты по моему тарифу и бонусам на месте, данные и личные правки сохранены.
 
 1. Скачай ZIP в новую пустую папку и проверь SHA-256. Если ссылка отвечает 5xx
    (сбой GitHub), скачай тот же файл через API: из
-   `https://api.github.com/repos/temaserditov/agents-repair-patch/releases/tags/v2026.11.10.2`
-   возьми `url` ассета с именем `agents-repair-patch-v2026.11.10.2.zip` и скачай его
+   `https://api.github.com/repos/temaserditov/agents-repair-patch/releases/tags/v2026.11.10.3`
+   возьми `url` ассета с именем `agents-repair-patch-v2026.11.10.3.zip` и скачай его
    `curl -fL -H 'Accept: application/octet-stream' <url> -o <имя>`. SHA-256 сверяй
    в любом случае; при несовпадении остановись. Распакуй, прочитай README и
-   скрипты. Не запускай неизвестный файл до проверки.
+   скрипты. Не запускай неизвестный файл до проверки. `vendor/bin/person-cutout` —
+   готовая проверенная программа вырезания фона для Mac (её SHA-256 закреплён в
+   README и manifest.json); сам её не запускай, ремонт только копирует её после
+   сверки хеша. Это не повод останавливаться.
 2. Диагностика. Mac/Linux: `bash repair.sh diagnose`. Windows:
    `powershell -NoProfile -ExecutionPolicy Bypass -File .\repair.ps1 diagnose`.
    Bypass применяется только к этому процессу, системную политику не меняй.

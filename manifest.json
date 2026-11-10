@@ -1,5 +1,5 @@
 {
-  "commit": "07a90addb9104e5c8429d360198bd227ea4ea0b0",
+  "commit": "9bca80937c43b08a64bfa1abd063284625fd8a52",
   "files": {
     "README.md": "9452d8767739d8193d82e9ad6c014eb763ea97329ddb353b84b9b9b1501871e0",
     "agents_repair.py": "b2959c962a5c15976e8030db09e6ab1776ab40e6e3517e46a81568aa6f4fd361",
@@ -7,7 +7,7 @@
     "repair.ps1": "7b754be2488a45546261ed39706c2a224fab4acac751a88c1e18d34ba45f0e8d",
     "repair.sh": "7c34c48086f8520f77e6172fea4f0bd10ab82d8adb6672a3c39a23921e835cf7",
     "tests/preflight_topics.test.mjs": "e58fec732027d48f7411fde28a56048e9829a89f0fb884d4dfff0fe69ee0804e",
-    "tests/test_agents_repair.py": "7c8fa27629f7627656a43f355cf8e9d11961347c1ed4260044808a2770f54e98",
+    "tests/test_agents_repair.py": "f5818098c8281a4dc5742b36bd9b14b6019150b229f4661d760bf1276885c39f",
     "tests/test_bundle_lists.py": "3d6e2932d33cda27ce2c991cc0a1a628e4a512f712891ee2a08523d1005c19ec",
     "tests/test_compat_repairs.py": "7eeb37676b31cbcf329e06c1963a8f7f557077949ba22ddb5ae97886c9e4cb04",
     "tests/test_content_repairs.py": "fd39eccd37f018fbca65f46972b7b2e0f92889bbdc897c16d086660f238884ea",
@@ -27,8 +27,8 @@
     "vendor/student-skill-repairs.py": "56e4e2a1b5cf7c4b4321d207b39e82a1412ae9b62c20d3b3c7e3b464d031c45c",
     "vendor/sync-tariff-panel.py": "12284790a86e0025f0e46ed1dc2d429e184892f43c38300b54e71613e2a38764",
     "vendor/team-runtime.py": "4d124d29144dab04ddd1b9b62b3e0505cfac08f023d3e74bd7b06cf6d3349308",
-    "ЗАДАНИЕ-ДЛЯ-CODEX.md": "35a30b86877fc52292a711d7573060d22a971eb8cbb3e483a3d0924031887d58"
+    "ЗАДАНИЕ-ДЛЯ-CODEX.md": "fe849061ba8c6f9964e7a2ee34c5e3b03b542bb7e98499032d45d03061354a9f"
   },
   "schemaVersion": 1,
-  "version": "v2026.11.10.2"
+  "version": "v2026.11.10.3"
 }
