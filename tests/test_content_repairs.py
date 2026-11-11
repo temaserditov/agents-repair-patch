@@ -31,7 +31,7 @@ TARBALL = ROOT/'apps/lms/installer-assets/agents/agents-tier-3-agents-release-20
 SETUP = ROOT/'installer/packages/shared/setup-tariff-content.py'
 VERSION = 'agents-release-20261108.1'
 COPY = VERSION+'-repair1'
-MAC_COPY = VERSION+'-repair2'
+MAC_COPY = VERSION+'-repair3'
 # SHA256 of the owner's verified address-level repair (repair-student-content-case.py) of the same bytes.
 OWNER_CONTRACT = 'e5c9ddb95b33edf86781ed1f87885f7b5c2ff582fa088ea90d1b629bcae05826'
 OWNER_BOARD = '3b2e132d2e5020ffb17a6d71acf2e82d9c1ebdbe46b7c5e086bf9704f8b6079e'
@@ -43,6 +43,9 @@ def module(name, path):
     return result
 
 content = module('repair_content_repairs', BUNDLE/'vendor/content-repairs.py')
+SLEEPS = []
+content._sleep = SLEEPS.append  # FIX_0590 retry pauses: recorded, never slept in tests
+WIN_COPY = VERSION+'-r1'
 
 
 @lru_cache(maxsize=1)
@@ -136,6 +139,23 @@ def linux_fixture(root):
     os.symlink('python', str(runtime/'bin/python3'))
     write(runtime/'pyvenv.cfg', 'home = '+str(interpreter.parent)+'\n')
     write(runtime/'lib/python3.12/site-packages/skia.py', b'# runtime\n')
+    write(release/'portable/resources/models/sherpa-onnx-whisper-tiny/tiny-tokens.txt', b'tokens\n')
+    write(project/'tools/agents-engine/active.json', json.dumps({'version': VERSION})+'\n')
+    return home, project, release
+
+
+def windows_fixture(root, user='Иван Петров'):
+    """install-windows.ps1 layout: a uv venv with Scripts/python.exe (no links), a
+    profile name with a space and Cyrillic letters (real learner failures)."""
+    home = root/user
+    project = home/'Documents/Content'
+    release = project/'tools/agents-engine/releases'/VERSION
+    install_release(release)
+    runtime = release/'portable/runtime'
+    write(runtime/'Scripts/python.exe', b'MZ launcher\n', 0o755)
+    write(runtime/'pyvenv.cfg', 'home = C:\\Users\\x\\AppData\\Roaming\\uv\\python\\cpython-3.12\n')
+    write(runtime/'Lib/site-packages/onnxruntime/__init__.py', b'# runtime\n')
+    write(release/'portable/tools/ffmpeg/bin/ffmpeg.exe', b'MZ ffmpeg\n', 0o755)
     write(release/'portable/resources/models/sherpa-onnx-whisper-tiny/tiny-tokens.txt', b'tokens\n')
     write(project/'tools/agents-engine/active.json', json.dumps({'version': VERSION})+'\n')
     return home, project, release
@@ -370,17 +390,163 @@ class LinuxRepairCopy(unittest.TestCase):
         self.assertEqual(self.plan(download=True)['content:u2net-model']['status'], 'skipped:unknown-cutout-binding')
 
 
-class WindowsDiagnosis(unittest.TestCase):
-    def test_windows_reports_without_writing(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            home, project, release = linux_fixture(Path(tmp))
+class WindowsArm64Diagnosis(unittest.TestCase):
+    def test_windows_arm64_reports_without_writing(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(content, '_windows_arm64', return_value=True):
+            home, project, release = windows_fixture(Path(tmp))
             snapshot = tree(home)
             items = by_code(content.plan(home, 'Windows'))
             self.assertEqual({c: i['status'] for c, i in items.items()},
-                             {'content:client-theme': 'skipped:windows-diagnostic-only', 'content:board-layout': 'skipped:windows-diagnostic-only',
-                              'content:u2net-model': 'skipped:windows-diagnostic-only'})
-            self.assertTrue(all(i['apply'] is None and 'BUG 0020' in i['detail'] for i in items.values()))
+                             {'content:client-theme': 'skipped:windows-arm64-unsupported', 'content:board-layout': 'skipped:windows-arm64-unsupported',
+                              'content:u2net-model': 'skipped:windows-arm64-unsupported'})
+            self.assertTrue(all(i['apply'] is None and 'ARM' in i['detail'] for i in items.values()))
             self.assertEqual(tree(home), snapshot)
+
+
+class WindowsRepairCopy(unittest.TestCase):
+    """FIX_0590: Windows x64 gets the portable repair in a short-named sibling copy."""
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.home, self.project, self.release = windows_fixture(Path(self.tmp.name))
+        self.copy = self.release.with_name(WIN_COPY)
+        self.pointer = self.project/'tools/agents-engine/active.json'
+        self.arm = patch.object(content, '_windows_arm64', return_value=False); self.arm.start()
+        del SLEEPS[:]
+
+    def tearDown(self):
+        self.arm.stop(); self.tmp.cleanup()
+
+    def plan(self, net=None, download=True):
+        return by_code(content.plan(self.home, 'Windows', download=download, opener=net or FakeNet({})))
+
+    def test_copy_model_reinstall_and_repeat(self):
+        weights = b'onnx-test-weights'*64
+        net = FakeNet({content.MODEL_URL: weights})
+        before = tree(self.home)
+        items = self.plan(net)
+        self.assertEqual(tree(self.home), before, 'plan() must not write')
+        self.assertEqual(net.requests, [], 'plan() makes no network request')
+        self.assertEqual(items['content:windows-repair']['status'], 'needs-fix')
+        self.assertEqual(items['content:windows-repair']['paths'], [self.pointer])
+        self.assertIn('BUG 0008', items['content:windows-repair']['detail'])
+        original = tree(self.release)
+        with patch.object(content, 'MODEL_SHA256', hashlib.sha256(weights).hexdigest()), patch.object(content, 'MODEL_SIZE', len(weights)):
+            self.assertEqual(apply_all(items.values()), {'content:windows-repair': None, 'content:u2net-model': None})
+            self.assertEqual(tree(self.release), original, 'installer version directory byte-identical')
+            self.assertEqual(self.pointer.read_text(), json.dumps({'version': WIN_COPY})+'\n')
+            portable = self.copy/'portable'
+            self.assertEqual(hashlib.sha256((portable/'contract.py').read_bytes()).hexdigest(), OWNER_CONTRACT)
+            self.assertEqual(hashlib.sha256((portable/'board.py').read_bytes()).hexdigest(), OWNER_BOARD)
+            self.assertEqual((portable/'resources/models'/content.MODEL_NAME).read_bytes(), weights)
+            self.assertFalse((self.release/'portable/resources/models'/content.MODEL_NAME).exists(), 'model only in the copy')
+            self.assertEqual((portable/'runtime/Scripts/python.exe').stat().st_ino, (self.release/'portable/runtime/Scripts/python.exe').stat().st_ino)
+            self.assertEqual((portable/'runtime/pyvenv.cfg').read_bytes(), (self.release/'portable/runtime/pyvenv.cfg').read_bytes())
+            self.assertEqual(sorted(p.name for p in self.release.parent.iterdir()), [VERSION, WIN_COPY])
+            repeat = self.plan(FakeNet({}))
+            self.assertEqual({c: i['status'] for c, i in repeat.items()}, {'content:windows-repair': 'unchanged', 'content:u2net-model': 'unchanged'})
+            # A v3 reinstall of the same revision compares <v> byte for byte, then re-points active.json.
+            reinstall_check(package(), self.project, VERSION, 'Windows')
+            reinstall_pointer(self.project, 'tools/agents-engine')
+            again = self.plan(FakeNet({}))
+            self.assertEqual(again['content:windows-repair']['status'], 'needs-fix'); self.assertIn('уже есть', again['content:windows-repair']['detail'])
+            self.assertEqual(again['content:u2net-model']['status'], 'unchanged', 'model found in the copy')
+            self.assertIsNone(again['content:windows-repair']['apply']())
+            self.assertEqual(self.pointer.read_text(), json.dumps({'version': WIN_COPY})+'\n')
+        self.assertEqual(SLEEPS, [])
+
+    def test_offline_and_5xx_are_retried_then_reported(self):
+        busy = urllib.error.HTTPError(content.MODEL_URL, 503, 'Service Unavailable', {}, None)
+        net = FakeNet({content.MODEL_URL: busy, API_TAG: busy})
+        results = apply_all(self.plan(net).values())
+        self.assertEqual(results, {'content:windows-repair': None, 'content:u2net-model': 'unavailable:network'})
+        urls = [u for u, _ in net.requests]
+        self.assertEqual(urls.count(content.MODEL_URL), content.ATTEMPTS)
+        self.assertEqual(urls.count(API_TAG), content.ATTEMPTS)
+        self.assertEqual(SLEEPS, [content.RETRY_PAUSE, content.RETRY_PAUSE*2]*2, 'bounded, growing pauses')
+        self.assertFalse((self.copy/'portable/resources/models'/content.MODEL_NAME).exists())
+        self.assertEqual(self.plan(FakeNet({}))['content:u2net-model']['status'], 'needs-fix', 'the next repair tries again')
+
+    def test_full_disk_is_reported_not_retried(self):
+        full = OSError(errno.ENOSPC, 'No space left on device')
+        net = FakeNet({content.MODEL_URL: full, API_TAG: release_json(), API_ASSET: full})
+        self.assertEqual(apply_all(self.plan(net).values())['content:u2net-model'], 'unavailable:disk')
+        self.assertEqual([u for u, _ in net.requests].count(content.MODEL_URL), 1)
+        self.assertEqual(SLEEPS, [])
+
+    def test_not_found_is_not_retried_and_wrong_bytes_are_refused(self):
+        gone = urllib.error.HTTPError(content.MODEL_URL, 404, 'Not Found', {}, None)
+        net = FakeNet({content.MODEL_URL: gone, API_TAG: release_json(), API_ASSET: b'x'*1000})
+        self.assertEqual(apply_all(self.plan(net).values())['content:u2net-model'], 'unavailable:checksum')
+        self.assertEqual([u for u, _ in net.requests].count(content.MODEL_URL), 1)
+        self.assertEqual([u for u, _ in net.requests].count(API_ASSET), 1, 'wrong bytes are an answer, not retried')
+        self.assertEqual(SLEEPS, [])
+        self.assertFalse((self.copy/'portable/resources/models'/content.MODEL_NAME).exists())
+
+    def test_incomplete_runtime_edited_file_and_hardlinks(self):
+        (self.release/'portable/runtime/Scripts/python.exe').unlink()
+        self.assertEqual([i['status'] for i in content.plan(self.home, 'Windows', download=False)], ['skipped:content-incomplete'])
+        write(self.release/'portable/runtime/Scripts/python.exe', b'MZ launcher\n', 0o755)
+        write(self.release/'portable/contract.py', real('portable/contract.py').replace(b'"navy", "night",', b'"navy", "night", "mine",'))
+        self.assertEqual(self.plan(download=False)['content:windows-repair']['status'], 'skipped:edited')
+        write(self.release/'portable/contract.py', real('portable/contract.py'))
+        snapshot = tree(self.home)
+        failure = OSError(errno.EINVAL, 'invalid function'); failure.winerror = 1
+        with patch.object(content.os, 'link', side_effect=failure):
+            self.assertEqual(self.plan(download=False)['content:windows-repair']['apply'](), 'skipped:hardlink-unavailable')
+        self.assertEqual(tree(self.home), snapshot)
+
+    def uv_minor_link(self, release=None):
+        """install-windows.ps1: UV_PYTHON_INSTALL_DIR=<v>/portable/tools/python; uv (0.8+) makes
+        cpython-3.12-windows-x86_64-none a directory link to the patch installation next to it."""
+        python = (release or self.release)/'portable/tools/python'
+        write(python/'cpython-3.12.12-windows-x86_64-none/python.exe', b'MZ python\n', 0o755)
+        os.symlink(str(python/'cpython-3.12.12-windows-x86_64-none'), str(python/'cpython-3.12-windows-x86_64-none'), target_is_directory=True)
+        return python
+
+    def test_installer_python_link_is_not_recreated_in_the_copy(self):
+        python = self.uv_minor_link()
+        weights = b'onnx-test-weights'*64
+        with patch.object(content, 'MODEL_SHA256', hashlib.sha256(weights).hexdigest()), patch.object(content, 'MODEL_SIZE', len(weights)):
+            items = self.plan(FakeNet({content.MODEL_URL: weights}))
+            self.assertEqual(items['content:windows-repair']['status'], 'needs-fix')
+            self.assertEqual(apply_all(items.values()), {'content:windows-repair': None, 'content:u2net-model': None})
+            link = self.copy/'portable/tools/python/cpython-3.12-windows-x86_64-none'
+            self.assertFalse(os.path.lexists(str(link)), 'no junction in the copy: deleting it can never reach <v>')
+            self.assertTrue((python/'cpython-3.12-windows-x86_64-none').is_symlink(), '<v> keeps its own link')
+            self.assertEqual((self.copy/'portable/tools/python/cpython-3.12.12-windows-x86_64-none/python.exe').stat().st_ino,
+                             (python/'cpython-3.12.12-windows-x86_64-none/python.exe').stat().st_ino)
+            self.assertEqual({c: i['status'] for c, i in self.plan(FakeNet({})).items()},
+                             {'content:windows-repair': 'unchanged', 'content:u2net-model': 'unchanged'})
+            reinstall_pointer(self.project, 'tools/agents-engine')
+            again = self.plan(FakeNet({}))['content:windows-repair']
+            self.assertEqual(again['status'], 'needs-fix'); self.assertIn('уже есть', again['detail'])
+            # A link that appears in the copy is foreign: an edited copy, not reused.
+            os.symlink(str(self.home), str(link), target_is_directory=True)
+            self.assertEqual(self.plan(FakeNet({}))['content:windows-repair']['status'], 'skipped:repair-copy-edited')
+
+    def test_foreign_links_are_refused_with_their_path(self):
+        python = self.release/'portable/tools/python'
+        write(self.home/'elsewhere/python.exe', b'MZ\n')
+        python.mkdir(parents=True)
+        os.symlink(str(self.home/'elsewhere'), str(python/'cpython-3.12-windows-x86_64-none'), target_is_directory=True)
+        item = self.plan(download=False)['content:windows-repair']
+        self.assertEqual(item['status'], 'skipped:linked-path')
+        self.assertIn('portable/tools/python/cpython-3.12-windows-x86_64-none, symlink', item['detail'], 'link outside the version')
+        os.unlink(str(python/'cpython-3.12-windows-x86_64-none'))
+        write(self.release/'portable/resources/target.txt', b'x')
+        os.symlink('target.txt', str(self.release/'portable/resources/alias.txt'))
+        item = self.plan(download=False)['content:windows-repair']
+        self.assertEqual(item['status'], 'skipped:linked-path')
+        self.assertIn('portable/resources/alias.txt, symlink', item['detail'], 'link outside the installer zone')
+
+    def test_extended_paths(self):
+        self.assertEqual(content._long('C:\\Users\\Иван Петров\\Documents\\Content', nt=True),
+                         '\\\\?\\C:\\Users\\Иван Петров\\Documents\\Content')
+        self.assertEqual(content._long('\\\\server\\share\\Content', nt=True), '\\\\?\\UNC\\server\\share\\Content')
+        already = '\\\\?\\C:\\x'
+        self.assertEqual(content._long(already, nt=True), already)
+        self.assertEqual(content._long('/home/x', nt=False), '/home/x')
+        self.assertLess(len(WIN_COPY) - len(VERSION), len('-repair1'), 'short copy name (BUG 0020)')
 
 
 STUB_BOARD = '#!/bin/bash\nset -e\npython3 -c \'import json,sys;c=json.load(open(sys.argv[1]));open(c["out"]+".pdf","w").write(c["card"]["page"]+":"+c["theme"])\' "$1"\necho "$1" >> "$LOG"\n'
@@ -444,7 +610,12 @@ class MacRepairCopy(unittest.TestCase):
         self.assertFalse((self.engine/'tools/person-cutout').exists(), 'the installer version gets no binary')
         script = (self.copy/'person-cutout.sh').read_bytes()
         self.assertIn(b'if [[ ! -x "$BIN" ]]; then', script); self.assertNotIn(b'-ot "$SRC"', script)
-        self.assertIn(b'.venv/bin/python', script)
+        self.assertIn(b'.venv/bin/python', script); self.assertIn(b'tools/u2net-cutout.py', script)
+        self.assertEqual(hashlib.sha256((self.copy/'tools/person-cutout.swift').read_bytes()).hexdigest(), content.CUTOUT_FIXED_SOURCE_SHA256,
+                         'the copy carries the source of its prebuilt binary')
+        self.assertEqual(hashlib.sha256((self.engine/'tools/person-cutout.swift').read_bytes()).hexdigest(), content.CUTOUT_SOURCE_SHA256)
+        self.assertEqual((self.copy/'tools/u2net-cutout.py').read_bytes(), content.U2NET_SCRIPT)
+        self.assertEqual(items['content:mac-u2net-model']['status'], 'needs-fix')
         self.assertEqual(list((self.copy/'out').iterdir()), [], 'generated output is not linked into the copy')
         self.assertEqual(self.plan()['content:mac-repair']['status'], 'unchanged')
         reinstall_check(package(), self.project, VERSION, 'Darwin')
@@ -512,8 +683,8 @@ class MacRepairCopy(unittest.TestCase):
                 self.assertFalse(os.path.lexists(str(self.project/'.venv')))
                 self.assertEqual([p.name for p in self.project.iterdir() if p.name.startswith('.venv')], [])
 
-    def run_cutout(self, venv=True):
-        """The repaired person-cutout.sh with stand-ins for Vision and clean-cutout.py; swiftc must not run."""
+    def run_cutout(self, venv=True, vision_exit=0, expected=0):
+        """The repaired person-cutout.sh with stand-ins for Vision, U2Net and clean-cutout.py; swiftc must not run."""
         self.plan()['content:mac-repair']['apply']()
         stubs = self.root/'stubs'; calls = self.root/'cutout.log'
         write(stubs/'swiftc', '#!/bin/sh\necho swiftc >> '+str(calls)+'\nexit 9\n', 0o755)
@@ -521,20 +692,124 @@ class MacRepairCopy(unittest.TestCase):
         if venv:
             write(self.project/'.venv/bin/python', '#!/bin/sh\necho venv-python >> '+str(calls)+'\ncp "$2" "$3"\n', 0o755)
         binary = self.copy/'tools/person-cutout'
-        binary.unlink(); write(binary, '#!/bin/sh\necho vision >> '+str(calls)+'\ncp "$1" "$2"\n', 0o755)
+        binary.unlink(); write(binary, '#!/bin/sh\necho vision >> '+str(calls)+'\n[ %d = 0 ] || exit %d\ncp "$1" "$2"\n' % (vision_exit, vision_exit), 0o755)
         write(self.root/'in.png', b'png')
         env = {**os.environ, 'PATH': str(stubs)+':/usr/bin:/bin', 'TMPDIR': str(self.root)}
         result = subprocess.run(['bash', str(self.copy/'person-cutout.sh'), str(self.root/'in.png'), str(self.root/'out.png')],
                                 env=env, capture_output=True, text=True, timeout=60)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual((self.root/'out.png').read_bytes(), b'png')
+        self.assertEqual(result.returncode, expected, result.stderr)
+        if expected == 0:
+            self.assertEqual((self.root/'out.png').read_bytes(), b'png')
+        self.stderr = result.stderr
         return calls.read_text().split()
 
     def test_repaired_script_prefers_content_venv_and_never_compiles(self):
         self.assertEqual(self.run_cutout(venv=True), ['vision', 'venv-python'])
+        self.assertNotIn('u2net', self.stderr, 'Vision worked: no fallback')
 
     def test_repaired_script_falls_back_to_python3_without_venv(self):
         self.assertEqual(self.run_cutout(venv=False), ['vision', 'system-python'])
+
+    def test_no_person_is_not_cut_by_u2net(self):
+        # Exit 2 is "no person in the frame" or a bad file: U2Net would invent a mask (review MEDIUM 1).
+        self.assertEqual(self.run_cutout(venv=True, vision_exit=2, expected=2), ['vision'])
+        self.assertNotIn('u2net', self.stderr)
+        self.assertFalse((self.root/'out.png').exists())
+
+    def test_vision_failure_falls_back_to_u2net_and_says_so(self):
+        # exit 4: Vision failed on the Neural Engine and on the CPU (a sandbox without ANE/IOSurface).
+        self.assertEqual(self.run_cutout(venv=True, vision_exit=4), ['vision', 'venv-python', 'venv-python'])
+        self.assertIn('путь u2net', self.stderr)
+
+    def test_temporary_folder_falls_back_next_to_the_output(self):
+        # TASK53: a strict sandbox may forbid TMPDIR; the cut still works next to the output.
+        self.plan()['content:mac-repair']['apply']()
+        stubs = self.root/'stubs'; write(stubs/'swiftc', '#!/bin/sh\nexit 9\n', 0o755)
+        write(self.project/'.venv/bin/python', '#!/bin/sh\ncp "$2" "$3"\n', 0o755)
+        binary = self.copy/'tools/person-cutout'; binary.unlink()
+        write(binary, '#!/bin/sh\necho "$(dirname "$2")" > '+str(self.root/'tmp.seen')+'\ncp "$1" "$2"\n', 0o755)
+        write(self.root/'in.png', b'png')
+        closed = self.root/'closed'; closed.mkdir(); closed.chmod(0o500)
+        out = self.root/'result/out.png'
+        env = {**os.environ, 'PATH': str(stubs)+':/usr/bin:/bin', 'TMPDIR': str(closed)}
+        try:
+            result = subprocess.run(['bash', str(self.copy/'person-cutout.sh'), str(self.root/'in.png'), str(out)],
+                                    env=env, capture_output=True, text=True, timeout=60)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(out.read_bytes(), b'png')
+            self.assertTrue((self.root/'tmp.seen').read_text().strip().startswith(str(self.root/'result')+'/.person-cutout.'))
+            self.assertEqual([p.name for p in (self.root/'result').iterdir()], ['out.png'], 'the temporary folder is removed')
+            locked = self.root/'locked'; locked.mkdir(); locked.chmod(0o500)
+            result = subprocess.run(['bash', str(self.copy/'person-cutout.sh'), str(self.root/'in.png'), str(locked/'out.png')],
+                                    env=env, capture_output=True, text=True, timeout=60)
+            self.assertEqual(result.returncode, 6); self.assertIn('некуда писать временные файлы', result.stderr)
+            result = subprocess.run(['bash', str(self.copy/'person-cutout.sh'), str(self.root/'in.png'), str(locked/'new/out.png')],
+                                    env=env, capture_output=True, text=True, timeout=60)
+            self.assertEqual(result.returncode, 6, 'a refused mkdir is the promised exit 6, not set -e'); self.assertIn('нельзя создать папку вывода', result.stderr)
+        finally:
+            closed.chmod(0o700); (self.root/'locked').chmod(0o700) if (self.root/'locked').exists() else None
+
+    def test_fixed_swift_retries_on_the_cpu_and_exits_4(self):
+        fixed = content.fragment_fix(real('swift/tools/person-cutout.swift'), content.SWIFT_FIX)
+        self.assertEqual(hashlib.sha256(fixed).hexdigest(), content.CUTOUT_FIXED_SOURCE_SHA256)
+        text = fixed.decode()
+        for needle in ['setComputeDevice(cpu, for: .main)', 'cpuRequest.usesCPUOnly = true', 'exit(4)',
+                       'var visionPath = "vision-ane"', 'visionPath = "vision-cpu"', 'var request = VNGeneratePersonSegmentationRequest()']:
+            self.assertIn(needle, text)
+        # The path is named only after the PNG is written.
+        self.assertLess(text.index('НЕ УДАЛОСЬ СОХРАНИТЬ PNG'), text.index('person-cutout: путь \\(visionPath)'))
+        self.assertEqual(content.fragment_state(fixed, content.SWIFT_FIX), 'fixed')
+
+    def test_u2net_script_is_cpu_only_and_pins_the_model(self):
+        text = content.U2NET_SCRIPT.decode()
+        self.assertIn('providers=["CPUExecutionProvider"]', text); self.assertNotIn('CoreML', text)
+        self.assertIn('MODEL_SHA256 = "'+content.MODEL_SHA256+'"', text)
+        compile(text, 'u2net-cutout.py', 'exec')
+
+    def test_mac_model_into_the_copy_offline_and_repeat(self):
+        weights = b'onnx-test-weights'*64
+        self.plan()['content:mac-repair']['apply']()
+        with patch.object(content, 'MODEL_SHA256', hashlib.sha256(weights).hexdigest()), patch.object(content, 'MODEL_SIZE', len(weights)), \
+                patch.object(content, '_sleep', lambda s: None):
+            offline = by_code(content.plan(self.home, 'Darwin', search_path='', opener=FakeNet({})))['content:mac-u2net-model']
+            self.assertEqual(offline['status'], 'needs-fix'); self.assertEqual(offline['apply'](), 'unavailable:network')
+            self.assertFalse((self.copy/'resources/models'/content.MODEL_NAME).exists())
+            item = by_code(content.plan(self.home, 'Darwin', search_path='', opener=FakeNet({content.MODEL_URL: weights})))['content:mac-u2net-model']
+            self.assertIsNone(item['apply']())
+            self.assertEqual((self.copy/'resources/models'/content.MODEL_NAME).read_bytes(), weights)
+            self.assertFalse((self.engine/'resources/models'/content.MODEL_NAME).exists(), 'model only in the copy')
+            self.assertEqual(by_code(content.plan(self.home, 'Darwin', search_path='', opener=FakeNet({})))['content:mac-u2net-model']['status'], 'unchanged')
+        reinstall_check(package(), self.project, VERSION, 'Darwin')
+
+    def test_existing_working_venv_gets_only_onnxruntime(self):
+        self.plan()['content:mac-repair']['apply']()
+        log = self.fake_uv()
+        write(self.project/'.venv/bin/python', '#!/bin/sh\nexit 0\n', 0o755)
+        write(self.project/'.venv/pyvenv.cfg', 'home = /x\nimplementation = CPython\nversion_info = 3.12.12\n')
+        for dist in content.CUTOUT_OWN_DISTS:
+            (self.project/'.venv/lib/python3.12/site-packages'/dist).mkdir(parents=True)
+        ready = {'full': False}
+        def probe(python, modules=content.CUTOUT_MODULES):
+            return modules == content.CUTOUT_BASE_MODULES or ready['full']
+        with patch.object(content, '_cutout_python_ready', side_effect=probe), patch.object(content, '_uv', return_value=str(self.uv)), \
+                patch.object(content, '_macos_supported', return_value=True):
+            item = by_code(content.plan(self.home, 'Darwin', search_path=''))['content:mac-cutout-python']
+            self.assertEqual(item['status'], 'needs-fix'); self.assertIn('только onnxruntime', item['detail'])
+            ready['full'] = True
+            self.assertIsNone(item['apply']())
+            self.assertEqual((self.root/'requirements.seen').read_text(), content.CUTOUT_ORT_REQUIREMENT)
+            self.assertNotIn('venv ', log.read_text(), 'the existing environment is not recreated')
+            self.assertEqual(by_code(content.plan(self.home, 'Darwin', search_path=''))['content:mac-cutout-python']['status'], 'unchanged')
+
+    def test_foreign_working_venv_is_not_extended(self):
+        self.plan()['content:mac-repair']['apply']()
+        write(self.project/'.venv/bin/python', '#!/bin/sh\nexit 0\n', 0o755)
+        write(self.project/'.venv/pyvenv.cfg', 'home = /x\nversion_info = 3.13.1\n')
+        probe = lambda python, modules=content.CUTOUT_MODULES: modules == content.CUTOUT_BASE_MODULES
+        with patch.object(content, '_cutout_python_ready', side_effect=probe), patch.object(content, '_uv', return_value=str(self.uv)), \
+                patch.object(content, '_macos_supported', return_value=True):
+            item = by_code(content.plan(self.home, 'Darwin', search_path=''))['content:mac-cutout-python']
+        self.assertEqual(item['status'], 'skipped:venv-not-ours'); self.assertIsNone(item['apply'])
 
     def test_learner_built_binary_is_replaced_in_the_copy_and_edited_script_is_kept(self):
         write(self.engine/'tools/person-cutout', b'#!/bin/sh\n', 0o755)   # swiftc on the learner's own Mac
@@ -644,9 +919,10 @@ class MacRepairCopy(unittest.TestCase):
         self.assertEqual(content._uv(self.home, str(path), hermes), str(path/'uv'))
         self.assertIsNone(content._uv(self.home, '', hermes))
 
-    def make_previous_copy(self):
-        """The copy patch v2026.11.10.1 built: links to <v>, doc.sh/pip.sh fixed, person-cutout.sh as shipped."""
-        previous = self.engine.with_name(VERSION+'-repair1')
+    def make_previous_copy(self, suffix='-repair1'):
+        """The copy patch v2026.11.10.1 built (-repair1: links to <v>, doc.sh/pip.sh fixed, person-cutout.sh
+        as shipped) or v2026.11.10.2/.3 built (-repair2: plus the first cutout script and binary)."""
+        previous = self.engine.with_name(VERSION+suffix)
         for path in sorted(self.engine.rglob('*')):
             relative = path.relative_to(self.engine)
             target = previous/relative
@@ -656,13 +932,33 @@ class MacRepairCopy(unittest.TestCase):
                 target.parent.mkdir(parents=True, exist_ok=True)
                 os.link(str(path), str(target))
         (previous/'out').mkdir(exist_ok=True)
-        for name, pairs in [('doc.sh', content.DOC_FIX), ('pip.sh', content.PIP_FIX)]:
+        fixes = [('doc.sh', content.DOC_FIX), ('pip.sh', content.PIP_FIX)] + ([('person-cutout.sh', content.CUTOUT_FIX)] if suffix == '-repair2' else [])
+        for name, pairs in fixes:
             fixed = content.fragment_fix((self.engine/name).read_bytes(), pairs)
             (previous/name).unlink(); write(previous/name, fixed, 0o755)
+        if suffix == '-repair2':
+            write(previous/'tools/person-cutout', b'first prebuilt binary', 0o755)
         self.pointer.write_text(json.dumps({'version': previous.name})+'\n')
         return previous
 
-    def test_copy_of_the_previous_patch_is_replaced_by_repair2(self):
+    def test_copy_of_the_cutout_patch_is_replaced_by_repair3(self):
+        previous = self.make_previous_copy('-repair2')
+        before = tree(previous)
+        item = self.plan()['content:mac-repair']
+        self.assertEqual(item['status'], 'needs-fix')
+        self.assertIsNone(item['apply']())
+        self.assertEqual(json.loads(self.pointer.read_text()), {'version': MAC_COPY})
+        self.assertEqual(tree(previous), before, 'the -repair2 copy stays as it was')
+        self.assertIn(b'tools/u2net-cutout.py', (self.copy/'person-cutout.sh').read_bytes())
+        self.assertEqual((self.copy/'tools/person-cutout').read_bytes(), (BUNDLE/'vendor/bin/person-cutout').read_bytes())
+        self.assertEqual(self.plan()['content:mac-repair']['status'], 'unchanged')
+        (previous/'pip.sh').write_bytes(b'#!/bin/bash\n# my own\n')
+        reinstall_pointer(self.project, 'tools/swift-design-engine', previous.name)
+        edited = self.plan()['content:mac-repair']
+        self.assertEqual(edited['status'], 'skipped:repair-copy-edited', 'an edited -repair2 is left alone')
+        self.assertIn('верните active.json на '+VERSION, edited['detail'])
+
+    def test_copy_of_the_previous_patch_is_replaced_by_repair3(self):
         previous = self.make_previous_copy()
         before = tree(previous)
         item = self.plan()['content:mac-repair']

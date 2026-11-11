@@ -35,7 +35,8 @@ V3 = 'apps/lms/installer-assets/windows-addon-v3/install.ps1'
 V1 = 'apps/lms/installer-assets/windows-addon-v1/install.ps1'
 OLD_HELPERS = [('de4e95f2', V2), ('0431c239', V2), ('93ead633', V3), ('6f373920', V3)]
 BANNER = 'Hermes Agent v{} (2026.11.1)\nProject: C:\\Users\\student\\AppData\\Local\\hermes\\hermes-agent\n'
-ACCEPT, REJECT = ['0.22.7', '0.23.0'], ['0.24.0', '9.0.0']
+# TASK52: Hermes 0.23.1 is accepted like 0.23.0; 0.24+ stays an honest refusal.
+ACCEPT, REJECT = ['0.22.7', '0.23.0', '0.23.1'], ['0.24.0', '9.0.0']
 
 
 def git_show(commit, path):
@@ -169,7 +170,7 @@ class RunnerGate(unittest.TestCase):
                         text = text.replace('\n', '\r\n')
                     self.assertEqual(compat.runner_gate_state(text), 'old')
                     old = compat.runner_gate_regex(text)
-                    self.assertEqual([accepts(old, v) for v in ACCEPT+REJECT], [True, False, False, False])
+                    self.assertEqual([accepts(old, v) for v in ACCEPT+REJECT], [True, False, False, False, False])
                     data = compat.widen_runner_gate_bytes(text.encode('utf-8'))
                     self.assertTrue(data.startswith(b'\xef\xbb\xbf'))
                     result = data.decode('utf-8')
@@ -181,7 +182,7 @@ class RunnerGate(unittest.TestCase):
                     self.assertIn('0.22.x/0.23.x source installation', after_lines[changed[0]])
                     new = compat.runner_gate_regex(result)
                     self.assertEqual(new, r'(?m)^Hermes Agent v?(0\.2[23]\.[0-9]+)\b')
-                    self.assertEqual([accepts(new, v) for v in ACCEPT+REJECT], [True, True, False, False])
+                    self.assertEqual([accepts(new, v) for v in ACCEPT+REJECT], [True, True, True, False, False])
                     self.assertEqual(compat.runner_gate_state(result), 'current')
                     self.assertIsNone(compat.widen_runner_gate(result))
 
@@ -216,7 +217,7 @@ $ast=[System.Management.Automation.Language.Parser]::ParseFile($Target,[ref]$tok
 $fn=$ast.FindAll({param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq 'Get-ReviewedVersion'},$true)
 . ([scriptblock]::Create($fn[0].Extent.Text))
 $result=[ordered]@{errors=$errors.Count;functions=$fn.Count}
-foreach($v in @('0.22.7','0.23.0','0.24.0','9.0.0')){try{$result[$v]=(Get-ReviewedVersion ("Hermes Agent v$v (2026.11.1)`nProject: x"))}catch{$result[$v]=$null}}
+foreach($v in @('0.22.7','0.23.0','0.23.1','0.24.0','9.0.0')){try{$result[$v]=(Get-ReviewedVersion ("Hermes Agent v$v (2026.11.1)`nProject: x"))}catch{$result[$v]=$null}}
 $result|ConvertTo-Json -Compress
 '''
         # -File with the target as an argument: the helper is only parsed (AST), and
@@ -227,8 +228,8 @@ $result|ConvertTo-Json -Compress
             for commit, path in OLD_HELPERS:
                 with self.subTest(commit=commit):
                     old = served(commit, path).encode('utf-8')
-                    for name, data, expected in [('old.ps1', old, ['0.22.7', None, None, None]),
-                                                 ('new.ps1', compat.widen_runner_gate_bytes(old), ['0.22.7', '0.23.0', None, None])]:
+                    for name, data, expected in [('old.ps1', old, ['0.22.7', None, None, None, None]),
+                                                 ('new.ps1', compat.widen_runner_gate_bytes(old), ['0.22.7', '0.23.0', '0.23.1', None, None])]:
                         file = Path(directory)/name
                         file.write_bytes(data)
                         run = subprocess.run(['pwsh', '-NoLogo', '-NoProfile', '-NonInteractive', '-File', str(check), str(file)],
@@ -236,7 +237,7 @@ $result|ConvertTo-Json -Compress
                         self.assertEqual(run.returncode, 0, run.stderr)
                         value = json.loads(run.stdout.strip().splitlines()[-1])
                         self.assertEqual((value['errors'], value['functions']), (0, 1))
-                        self.assertEqual([value[v] for v in ['0.22.7', '0.23.0', '0.24.0', '9.0.0']], expected)
+                        self.assertEqual([value[v] for v in ['0.22.7', '0.23.0', '0.23.1', '0.24.0', '9.0.0']], expected)
 
 
 @unittest.skipIf(yaml is None, 'PyYAML is not importable here: YAML equivalence checks need it')

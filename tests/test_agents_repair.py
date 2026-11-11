@@ -248,6 +248,27 @@ class RepairTests(unittest.TestCase):
                 for name in ['copywriter','designer','tech']:
                     expected = (f.profiles/name/'AGENTS.md').read_bytes() if system=='Windows' else ('course soul '+name).encode()
                     self.assertEqual((f.profiles/name/'SOUL.md').read_bytes(),expected)
+    def test_tooling_addon_block_is_not_a_personal_edit(self):
+        # FIX_0596: agents-tooling-bootstrap appends exactly one marked block; verify must
+        # not read it as personal text (panel-api would turn unfixable before an update).
+        f = self.fixture(); f.run(True)
+        target = f.profiles/'designer/SOUL.md'; package = target.read_bytes()
+        block = ('<!-- agents-student-tooling:start -->\n## Дополнительные инструменты моей установки\n'
+                 'Поиск по базе знаний: kb_search.\n<!-- agents-student-tooling:end -->\n').encode()
+        soul = lambda out: next(x for x in out['findings'] if x['code']=='soul:designer')
+        cases = [(package.rstrip()+b'\n\n'+block, 'unchanged'),
+                 (package.rstrip()+'\n\n## Личные дополнения (перенесены при обновлении 2026-11-10)\n\n'.encode()+block, 'unchanged'),
+                 (package.rstrip().replace(b'\n', b'\r\n')+b'\r\n\r\n'+block.replace(b'\n', b'\r\n'), 'unchanged'),
+                 (b'\xef\xbb\xbf'+package.rstrip()+b'\n\n'+block, 'unchanged'),
+                 (package.rstrip()+b'\n\n'+block+b'\n'+block, 'skipped:user-text'),
+                 (package.rstrip()+b'\nstudent addition\n\n'+block, 'skipped:user-text'),
+                 (package.rstrip()+b'\n\n'+block.replace(b':end -->', b':finish -->'), 'skipped:user-text')]
+        for data, status in cases:
+            with self.subTest(status=status, size=len(data)):
+                target.write_bytes(data)
+                out = f.run(verify=True)
+                self.assertEqual(soul(out)['status'], status)
+                self.assertEqual(target.read_bytes(), data, 'never rewritten')
     def test_user_soul_addition_preserved(self):
         f = self.fixture()
         target = f.profiles/'designer/SOUL.md'; data = upstream_bytes()+b'\nstudent addition\n'; target.write_bytes(data)

@@ -130,7 +130,12 @@ class PanelIntegration(unittest.TestCase):
     def test_latest_panel_is_fixed_once_and_stays_recognised(self):
         if not node():
             self.skipTest('node is not installed')
-        f = self.fixture(payload(RUNNER_UPDATED), payload(SERVERS['b2469181']))
+        self.latest_panel_case('0.23.0')
+        self.tearDown(); self.setUp()
+        self.latest_panel_case('0.23.1')  # TASK52: same runner shim on Hermes 0.23.1
+
+    def latest_panel_case(self, version):
+        f = self.fixture(payload(RUNNER_UPDATED), payload(SERVERS['b2469181']), version=version)
         out = f.run()
         self.assertEqual(self.finding(out, 'webshell-runner-023')['status'], 'planned')
         self.assertEqual(self.finding(out, 'webshell-preflight')['status'], 'planned')
@@ -198,10 +203,29 @@ class PanelIntegration(unittest.TestCase):
         self.assertNotIn('webshell-preflight', [x['code'] for x in out['findings']])
 
     def test_profile_context_on_manual_hermes_023(self):
+        for version in ['0.23.0', '0.23.1']:
+            with self.subTest(version=version):
+                self.tearDown(); self.setUp()
+                self.profile_context_case(version)
+
+    def test_hermes_024_loader_is_not_rewritten(self):
+        # TASK52: the loader transform is reviewed for 0.23.x only; on 0.24+ it is not offered.
+        # (The runner shim is version-neutral: it falls back to the old import.)
         with tarfile.open(ROOT/'apps/lms/installer-assets/v0.3.0/hermes-agent-v0.23.0.tar.gz') as archive:
             member = next(m for m in archive.getmembers() if m.name.endswith('/agent/prompt_builder.py'))
             loader = archive.extractfile(member).read()
-        f = self.fixture(payload(RUNNER_UPDATED), payload(SERVERS['b2469181']))
+        f = self.fixture(payload(RUNNER_UPDATED), payload(SERVERS['b2469181']), version='0.24.0')
+        suite.write(f.hermes/'hermes-agent/agent/prompt_builder.py', loader)
+        out = f.run(True)
+        self.assertNotIn('profile-context', [x['code'] for x in out['findings']])
+        self.assertEqual((f.hermes/'hermes-agent/agent/prompt_builder.py').read_bytes(), loader)
+
+    def profile_context_case(self, version):
+        # Hermes 0.23.1 ships agent/prompt_builder.py byte-identical to 0.23.0.
+        with tarfile.open(ROOT/'apps/lms/installer-assets/v0.3.0/hermes-agent-v0.23.0.tar.gz') as archive:
+            member = next(m for m in archive.getmembers() if m.name.endswith('/agent/prompt_builder.py'))
+            loader = archive.extractfile(member).read()
+        f = self.fixture(payload(RUNNER_UPDATED), payload(SERVERS['b2469181']), version=version)
         target = f.hermes/'hermes-agent/agent/prompt_builder.py'
         suite.write(target, loader)
         self.assertEqual(self.finding(f.run(), 'profile-context')['status'], 'planned')

@@ -1,21 +1,21 @@
 {
-  "commit": "9bca80937c43b08a64bfa1abd063284625fd8a52",
+  "commit": "169e9c72a459421832b0b3f6d7006ea9c1fac797",
   "files": {
-    "README.md": "9452d8767739d8193d82e9ad6c014eb763ea97329ddb353b84b9b9b1501871e0",
-    "agents_repair.py": "b2959c962a5c15976e8030db09e6ab1776ab40e6e3517e46a81568aa6f4fd361",
+    "README.md": "d76e104e0138499146826e904e5dde99d52ebbf71994aad44d00d6560e710b9e",
+    "agents_repair.py": "015e2fc8f16aba57e930bf59583c41c91c948082d7e5f0b27df6b36d494bc9a6",
     "known-baselines.json": "6970babc1dc409a935a36210e41f583c8555a87b3e0fc3da9c8a7fca5ecd4ca0",
     "repair.ps1": "7b754be2488a45546261ed39706c2a224fab4acac751a88c1e18d34ba45f0e8d",
     "repair.sh": "7c34c48086f8520f77e6172fea4f0bd10ab82d8adb6672a3c39a23921e835cf7",
     "tests/preflight_topics.test.mjs": "e58fec732027d48f7411fde28a56048e9829a89f0fb884d4dfff0fe69ee0804e",
-    "tests/test_agents_repair.py": "f5818098c8281a4dc5742b36bd9b14b6019150b229f4661d760bf1276885c39f",
+    "tests/test_agents_repair.py": "d5598427a2eadb3e2fe5221f8294fa1614b582bab897a317f40883926b7717f5",
     "tests/test_bundle_lists.py": "3d6e2932d33cda27ce2c991cc0a1a628e4a512f712891ee2a08523d1005c19ec",
-    "tests/test_compat_repairs.py": "7eeb37676b31cbcf329e06c1963a8f7f557077949ba22ddb5ae97886c9e4cb04",
-    "tests/test_content_repairs.py": "fd39eccd37f018fbca65f46972b7b2e0f92889bbdc897c16d086660f238884ea",
-    "tests/test_panel_repairs.py": "1ac11cf37407aa0faba5de8c8b167f68eb82c63066bb1041260e8d4b50fc2da2",
+    "tests/test_compat_repairs.py": "a9cf87cf1788dcae50c90128f466e77789617150273e1c2402988647d81b7735",
+    "tests/test_content_repairs.py": "55a3f609ee782252252b1b1335ecbba5819df457a42dcd3985ba123b106734cd",
+    "tests/test_panel_repairs.py": "1b65614ff8ad3c45aaf8a0ba1a905783c24b281479f91a6c2244fc1be667c1a6",
     "vendor/agents-diagnose.mjs": "b81d135c21667bad2acf0ab44cd67dbd10c130b2bd60411e1eae22afb3f5ce23",
-    "vendor/bin/person-cutout": "0ed4bc48a15a71acd8fc6704e53a8e28c6f47afa170f0945924d38334aba2eea",
+    "vendor/bin/person-cutout": "0365ccf58291628a0489d65aeb35e4331bc6fda1d4dcb97c53b505e4b0cb8754",
     "vendor/compat-repairs.py": "33555e6d60819c9a3e8c79b86ae2a524ee19d71fe32573b744c2050040e3e750",
-    "vendor/content-repairs.py": "0a8cfaec05082fd5b72cfa08c974f51f2c8e0ec07aa4278f4aa2802c394cb3a9",
+    "vendor/content-repairs.py": "2dd5708faadd0000eef148aba8425b44346d4b2edd87fcf4fae4e8dd95bfd073",
     "vendor/designer-tools.py": "48a8f4b2de3714c30189a19e4de35242610f372c104e894b63abc6230c2f5f69",
     "vendor/panel-repairs.py": "d4214ade6feb75697f3531ec717f01fe9431bb2f9f2666061dfdc0086173f1fd",
     "vendor/plugins/infobiz-team/__init__.py": "90f4ee184925a2b4c0060e7e4b2c90854fdd409ccb0ede58c1774d6364b25d35",
@@ -27,8 +27,8 @@
     "vendor/student-skill-repairs.py": "56e4e2a1b5cf7c4b4321d207b39e82a1412ae9b62c20d3b3c7e3b464d031c45c",
     "vendor/sync-tariff-panel.py": "12284790a86e0025f0e46ed1dc2d429e184892f43c38300b54e71613e2a38764",
     "vendor/team-runtime.py": "4d124d29144dab04ddd1b9b62b3e0505cfac08f023d3e74bd7b06cf6d3349308",
-    "ЗАДАНИЕ-ДЛЯ-CODEX.md": "fe849061ba8c6f9964e7a2ee34c5e3b03b542bb7e98499032d45d03061354a9f"
+    "ЗАДАНИЕ-ДЛЯ-CODEX.md": "76960c7970abf8309c579be733c2fe9f65d9a1f13eca670e0caaafce640d387e"
   },
   "schemaVersion": 1,
-  "version": "v2026.11.10.3"
+  "version": "v2026.11.10.4"
 }

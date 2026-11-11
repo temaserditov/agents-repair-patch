@@ -19,12 +19,16 @@ reinstall puts ``active.json`` back on ``<v>``, the intact copy is reused.
 
 Fixes are exact reviewed fragment replacements whose result equals the owner's
 verified address-level repair (FIX_20261109_student_content_engine).
-Windows is diagnosed only (hard links and long pip paths, BUG 0020).
+Windows x64 (FIX_0590) gets the same portable repair in a short-named copy
+``<v>-r1`` (BUG 0020: MAX_PATH), built through extended-length paths;
+only the model is added there: onnxruntime, scipy, Pillow and NumPy already come
+with the portable runtime of install-windows.ps1. Windows ARM64 is diagnosed only.
 """
 import errno
 import hashlib
 import http.client
 import json
+import ntpath
 import os
 from pathlib import Path
 import platform
@@ -33,6 +37,7 @@ import shutil
 import stat
 import subprocess
 import tempfile
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -135,13 +140,142 @@ CUTOUT_CALL_FIXED = (b'PYTHON=python3\n'
                      b'if [[ -x "$VENV_PYTHON" ]]; then PYTHON="$VENV_PYTHON"; fi\n'
                      b'"$PYTHON" "$CLEAN" "$TMP_DIR/raw.png" "$2"\n')
 CUTOUT_FIX = [(CUTOUT_BUILD, CUTOUT_BUILD_FIXED), (CUTOUT_CALL, CUTOUT_CALL_FIXED)]
+# TASK53 (FIX_0594). Without the Neural Engine (a sandbox closes its XPC
+# service: "ANECF error: failed to load ANE model") Vision cannot segment. The
+# fixed person-cutout.swift retries the same request on the CPU and exits 4 when
+# Vision still fails; the fixed script then cuts the person with U2Net through
+# onnxruntime (CPU provider only: CoreML would reach for the ANE again).
+SWIFT_REQUEST = b'let request = VNGeneratePersonSegmentationRequest()\n'
+SWIFT_REQUEST_FIXED = b'var request = VNGeneratePersonSegmentationRequest()\n'
+SWIFT_PERFORM = ('do {\n    try handler.perform([request])\n} catch {\n'
+                 '    fail("VISION НЕ СМОГ ПОСТРОИТЬ МАСКУ: \\(error.localizedDescription)")\n}\n').encode()
+SWIFT_PERFORM_FIXED = (
+    '// TASK53: without the Neural Engine (a sandbox closes its XPC service) Vision\n'
+    '// cannot load its ANE model; the same request is retried on the CPU. When Vision\n'
+    '// still fails, exit 4: person-cutout.sh then cuts the person with U2Net.\n'
+    'func visionFailed(_ message: String) -> Never {\n'
+    '    FileHandle.standardError.write((message + "\\n").data(using: .utf8)!)\n'
+    '    exit(4)\n'
+    '}\n'
+    '// The path is printed only after the PNG is written: a path that gave no result is never named.\n'
+    'var visionPath = "vision-ane"\n'
+    'do {\n'
+    '    try handler.perform([request])\n'
+    '} catch {\n'
+    '    FileHandle.standardError.write("person-cutout: Vision не сработал (\\(error.localizedDescription)); повтор на CPU\\n".data(using: .utf8)!)\n'
+    '    let cpuRequest = VNGeneratePersonSegmentationRequest()\n'
+    '    cpuRequest.qualityLevel = .accurate\n'
+    '    cpuRequest.outputPixelFormat = kCVPixelFormatType_OneComponent8\n'
+    '    if #available(macOS 14.0, *) {\n'
+    '        if let devices = try? cpuRequest.supportedComputeStageDevices, let main = devices[.main],\n'
+    '           let cpu = main.first(where: { if case .cpu = $0 { return true }; return false }) {\n'
+    '            cpuRequest.setComputeDevice(cpu, for: .main)\n'
+    '        }\n'
+    '    } else {\n'
+    '        cpuRequest.usesCPUOnly = true\n'
+    '    }\n'
+    '    do {\n'
+    '        try VNImageRequestHandler(url: inputURL, options: [:]).perform([cpuRequest])\n'
+    '        request = cpuRequest\n'
+    '        visionPath = "vision-cpu"\n'
+    '    } catch {\n'
+    '        visionFailed("VISION НЕ СМОГ ПОСТРОИТЬ МАСКУ НИ НА NEURAL ENGINE, НИ НА CPU: \\(error.localizedDescription)")\n'
+    '    }\n'
+    '}\n').encode()
+SWIFT_DONE = 'print("готово: \\(outputURL.path)")\n'.encode()
+SWIFT_DONE_FIXED = ('FileHandle.standardError.write("person-cutout: путь \\(visionPath)\\n".data(using: .utf8)!)\n'
+                    'print("готово: \\(outputURL.path)")\n').encode()
+SWIFT_FIX = [(SWIFT_REQUEST, SWIFT_REQUEST_FIXED), (SWIFT_PERFORM, SWIFT_PERFORM_FIXED), (SWIFT_DONE, SWIFT_DONE_FIXED)]
+SWIFT_RELATIVE = 'tools/person-cutout.swift'
+# The script of this patch: prebuilt program first, U2Net when Vision fails (any non-zero exit).
+CUTOUT_RUN = b'"$BIN" "$1" "$TMP_DIR/raw.png"\npython3 "$CLEAN" "$TMP_DIR/raw.png" "$2"\n'
+CUTOUT_RUN_FIXED = (b'PYTHON=python3\n'
+                    b'# BUG 0013: Documents/Content/.venv holds pinned Pillow/NumPy/OpenCV/onnxruntime wheels; python3 stays the fallback.\n'
+                    b'VENV_PYTHON="$ROOT/../../../../.venv/bin/python"\n'
+                    b'if [[ -x "$VENV_PYTHON" ]]; then PYTHON="$VENV_PYTHON"; fi\n'
+                    b'# TASK53: Vision fails without the Neural Engine (a sandbox) even after its CPU retry;\n'
+                    b'# the same cut is then made by U2Net from the pinned model of this copy.\n'
+                    b'# Only exit 4 means "Vision itself failed"; 2 is no person in the frame or a bad file.\n'
+                    b'rc=0\n'
+                    b'"$BIN" "$1" "$TMP_DIR/raw.png" || rc=$?\n'
+                    b'if [[ $rc -eq 4 ]]; then\n'
+                    + '  echo "person-cutout: Vision не построил маску; запасной путь u2net" >&2\n'.encode() +
+                    b'  "$PYTHON" "$ROOT/tools/u2net-cutout.py" "$1" "$TMP_DIR/raw.png"\n'
+                    + '  echo "person-cutout: путь u2net" >&2\n'.encode() +
+                    b'elif [[ $rc -ne 0 ]]; then\n'
+                    b'  exit "$rc"\n'
+                    b'fi\n'
+                    b'"$PYTHON" "$CLEAN" "$TMP_DIR/raw.png" "$2"\n')
+# TASK53: a strict sandbox may allow writes only next to the output; then the
+# temporary folder lives there, and nowhere to write is said plainly (exit 6).
+CUTOUT_TMP = b'TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/person-cutout.XXXXXX")"\n'
+CUTOUT_TMP_FIXED = (b'OUT_DIR="$(dirname "$2")"\n'
+                    b'mkdir -p "$OUT_DIR" || {\n'
+                    + '  echo "person-cutout: нельзя создать папку вывода $OUT_DIR; запусти вне песочницы" >&2\n'.encode() +
+                    b'  exit 6\n'
+                    b'}\n'
+                    b'# TASK53: a sandbox may forbid writes outside the output folder; work next to the output then.\n'
+                    # No 2>/dev/null: a strict sandbox forbids writing even /dev/null (11.11 proof run).
+                    b'TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/person-cutout.XXXXXX")" || TMP_DIR="$(mktemp -d "$OUT_DIR/.person-cutout.XXXXXX")" || {\n'
+                    + '  echo "person-cutout: некуда писать временные файлы (ни TMPDIR, ни папка вывода $OUT_DIR); запусти вне песочницы" >&2\n'.encode() +
+                    b'  exit 6\n'
+                    b'}\n')
+CUTOUT_FIX3 = [(CUTOUT_BUILD, CUTOUT_BUILD_FIXED), (CUTOUT_TMP, CUTOUT_TMP_FIXED), (CUTOUT_RUN, CUTOUT_RUN_FIXED)]
+U2NET_SCRIPT_RELATIVE = 'tools/u2net-cutout.py'
+U2NET_SCRIPT = (
+    '#!/usr/bin/env python3\n'
+    '# TASK53 (FIX_0594): person mask without Apple Vision. U2Net human segmentation,\n'
+    '# pinned weights next to this copy, onnxruntime on the CPU only. Writes an RGBA\n'
+    '# PNG like the Vision step; clean-cutout.py removes islands and crops afterwards.\n'
+    'import hashlib\n'
+    'from pathlib import Path\n'
+    'import sys\n'
+    '\n'
+    'import numpy as np\n'
+    'import onnxruntime as ort\n'
+    'from PIL import Image, ImageOps\n'
+    '\n'
+    'MODEL_SHA256 = "' + MODEL_SHA256 + '"\n'
+    '\n'
+    '\n'
+    'def fail(message):\n'
+    '    raise SystemExit("PERSON CUTOUT U2NET: " + message)\n'
+    '\n'
+    '\n'
+    'if len(sys.argv) != 3:\n'
+    '    fail("использование: u2net-cutout.py input output.png")\n'
+    'model = Path(__file__).resolve().parents[1] / "resources" / "models" / "' + MODEL_NAME + '"\n'
+    'if not model.is_file():\n'
+    '    fail("нет модели U2Net: повтори ремонт агентов (repair --apply)")\n'
+    'digest = hashlib.sha256()\n'
+    'with model.open("rb") as stream:\n'
+    '    for block in iter(lambda: stream.read(1024 * 1024), b""):\n'
+    '        digest.update(block)\n'
+    'if digest.hexdigest() != MODEL_SHA256:\n'
+    '    fail("модель U2Net повреждена: повтори ремонт агентов")\n'
+    'image = ImageOps.exif_transpose(Image.open(sys.argv[1])).convert("RGB")\n'
+    'small = np.asarray(image.resize((320, 320), Image.Resampling.LANCZOS), dtype=np.float32) / 255\n'
+    'data = ((small - np.array([.485, .456, .406], np.float32)) / np.array([.229, .224, .225], np.float32)).transpose(2, 0, 1)[None]\n'
+    'options = ort.SessionOptions()\n'
+    'options.intra_op_num_threads = 2\n'
+    'session = ort.InferenceSession(str(model), sess_options=options, providers=["CPUExecutionProvider"])\n'
+    'prediction = session.run(None, {session.get_inputs()[0].name: data})[0][0, 0]\n'
+    'prediction = (prediction - prediction.min()) / max(float(prediction.max() - prediction.min()), 1e-8)\n'
+    'mask = Image.fromarray(np.uint8(prediction * 255)).resize(image.size, Image.Resampling.LANCZOS)\n'
+    'rgba = image.convert("RGBA")\n'
+    'rgba.putalpha(mask)\n'
+    'Path(sys.argv[2]).parent.mkdir(parents=True, exist_ok=True)\n'
+    'rgba.save(sys.argv[2])\n'
+    'print("готово: " + sys.argv[2])\n').encode()
 # The prebuilt binary is bound to the one person-cutout.swift every released
-# revision ships (20261101.1 ... 20261110.1). Built in a clean Tart macOS 15.7.7
-# guest, Command Line Tools Swift 6.1.2, `swiftc -O -target {arm64,x86_64}-apple-macos12.0`,
-# `lipo -create`, ad-hoc `codesign --force -s - --timestamp=none`; two clean builds
-# gave identical bytes.
+# revision ships (20261101.1 ... 20261110.1): it is built from that source with
+# SWIFT_FIX applied (CUTOUT_FIXED_SOURCE_SHA256), which the copy carries as its
+# tools/person-cutout.swift. Built in a clean Tart macOS 15.7.7 guest, Command
+# Line Tools Swift 6.1.2, `swiftc -O -target {arm64,x86_64}-apple-macos12.0`,
+# `lipo -create`, ad-hoc `codesign --force -s - --timestamp=none`.
 CUTOUT_SOURCE_SHA256 = 'fe9884fc2061c5d36d597ca1a9cd1ee5efcd973a2340f4eda8a065f2730494b1'
-CUTOUT_BINARY_SHA256 = '0ed4bc48a15a71acd8fc6704e53a8e28c6f47afa170f0945924d38334aba2eea'
+CUTOUT_FIXED_SOURCE_SHA256 = '7ab3ef1d565c8209225959c85f1527cd7bab0cf41e8235da1d2b1d7a52e2fbe8'
+CUTOUT_BINARY_SHA256 = '0365ccf58291628a0489d65aeb35e4331bc6fda1d4dcb97c53b505e4b0cb8754'
 CUTOUT_BINARY = Path(__file__).resolve().parent / 'bin/person-cutout'
 CUTOUT_RELATIVE = 'tools/person-cutout'
 
@@ -164,6 +298,15 @@ CUTOUT_REQUIREMENTS = (
     ' --hash=sha256:030ca5e0837a2963ab36ef896baa9767eb8d2b83353fb28af5a521e40dd8756f'
     ' --hash=sha256:1e55af3abfb462eeeabe5c775f12bdb36216d8a93a3583d69e6bd6e1d6ba7d00\n'
 )
+# TASK53: the U2Net fallback. onnxruntime 1.23.2 is the version the portable Content
+# runtime of Linux/Windows pins; its cp312 macOS wheels need macOS 13 (both arches).
+# It imports without its optional dependencies (coloredlogs, sympy, ...): --no-deps.
+CUTOUT_ORT_REQUIREMENT = ('onnxruntime==1.23.2'
+                          ' --hash=sha256:b8f029a6b98d3cf5be564d52802bb50a8489ab73409fa9db0bf583eabb7c2321'
+                          ' --hash=sha256:218295a8acae83905f6f1aed8cacb8e3eb3bd7513a13fe4ba3b2664a19fc4a6b\n')
+CUTOUT_REQUIREMENTS += CUTOUT_ORT_REQUIREMENT
+CUTOUT_BASE_MODULES = 'PIL, numpy, cv2'
+CUTOUT_MODULES = CUTOUT_BASE_MODULES + ', onnxruntime'
 CUTOUT_MIN_MACOS = {'arm64': 13, 'x86_64': 14}
 
 ENGINES = {
@@ -177,18 +320,59 @@ ENGINES = {
     'portable': {'pointer': 'tools/agents-engine/active.json', 'releases': 'tools/agents-engine/releases',
                  'fixes': {'portable/contract.py': ('BUG 0008', CONTRACT_FIX), 'portable/board.py': ('BUG 0009', BOARD_FIX)},
                  'links': 'portable/runtime', 'dynamic': ('portable/runtime', 'portable/resources/models'), 'fresh': (),
-                 'suffix': '-repair1', 'previous': (), 'optional': (), 'previous_fixes': (), 'additions': False},
+                 'suffix': '-repair1', 'previous': (), 'optional': (), 'previous_fixes': {}, 'additions': False,
+                 'python': 'bin/python'},
     'mac': {'pointer': 'tools/swift-design-engine/active.json', 'releases': 'tools/swift-design-engine/releases',
-            'fixes': {'doc.sh': ('OBS 0008', DOC_FIX), 'pip.sh': ('OBS 0008', PIP_FIX), 'person-cutout.sh': ('BUG 0013', CUTOUT_FIX)},
+            'fixes': {'doc.sh': ('OBS 0008', DOC_FIX), 'pip.sh': ('OBS 0008', PIP_FIX), 'person-cutout.sh': ('BUG 0013', CUTOUT_FIX3),
+                      SWIFT_RELATIVE: ('BUG 0013', SWIFT_FIX)},
             # Prebuilt Swift tools overwrite out/* in place; a link there would write into <v>.
             'links': None, 'dynamic': ('out',), 'fresh': ('out',),
-            'suffix': '-repair2', 'previous': ('-repair1',), 'optional': ('person-cutout.sh',),
-            'previous_fixes': ('doc.sh', 'pip.sh'), 'additions': True},
+            # -repair2 (v2026.11.10.2/.3) holds the first cutout script and binary; -repair3
+            # adds the Vision CPU retry and the U2Net fallback (TASK53).
+            'suffix': '-repair3', 'previous': ('-repair1', '-repair2'), 'optional': ('person-cutout.sh', SWIFT_RELATIVE),
+            'previous_fixes': {'-repair1': {'doc.sh': DOC_FIX, 'pip.sh': PIP_FIX},
+                               '-repair2': {'doc.sh': DOC_FIX, 'pip.sh': PIP_FIX, 'person-cutout.sh': CUTOUT_FIX}},
+            'additions': True, 'python': None},
 }
+# Windows x64 (FIX_0590): the same portable engine and fixes. The venv of
+# install-windows.ps1 has Scripts/python.exe; the copy name is short because
+# runtime/Lib/site-packages paths already approach MAX_PATH (BUG 0020).
+# uv (0.8+) installs the managed CPython of install-windows.ps1 into
+# portable/tools/python and makes the minor-version directory
+# (cpython-3.12-windows-x86_64-none) a junction to the patch installation next
+# to it; the venv's pyvenv.cfg points through it by an absolute path into <v>.
+# Such a junction is the installer's own and is NOT recreated in the copy: the
+# copy's runtime reaches the base Python of <v> through pyvenv.cfg, and a copy
+# without junctions is safe to delete in Windows PowerShell 5.1 (Remove-Item
+# -Recurse follows junctions there and would wipe <v>'s Python, PowerShell#621).
+ENGINES['windows'] = dict(ENGINES['portable'], suffix='-r1', python='Scripts/python.exe', junctions=('portable/tools/python',))
+
+
+BACKSLASH = chr(92)
+PREFIX = BACKSLASH * 2 + '?' + BACKSLASH  # extended-length path prefix
 
 
 def sha(data):
     return hashlib.sha256(data).hexdigest()
+
+
+def _long(path, nt=None):
+    """An extended-length Windows path so deep runtime files of a learner with a
+    long or Cyrillic profile name stay reachable past MAX_PATH (BUG 0020).
+    Unchanged on other systems."""
+    if not (os.name == 'nt' if nt is None else nt):
+        return str(path)
+    text = str(path)
+    if text.startswith(PREFIX):
+        return text
+    text = ntpath.abspath(text)
+    return PREFIX + 'UNC' + BACKSLASH + text[2:] if text.startswith(BACKSLASH * 2) else PREFIX + text
+
+
+def _windows_arm64():
+    machine = platform.machine().lower()
+    return machine in {'arm64', 'aarch64'} or any(os.environ.get(k, '').upper() == 'ARM64'
+                                                    for k in ('PROCESSOR_ARCHITEW6432', 'PROCESSOR_ARCHITECTURE'))
 
 
 def _plain(path, root):
@@ -290,29 +474,90 @@ def plan(home, system, *, download=True, opener=None, search_path=None, hermes=N
         if not project.is_dir():
             return []
         if system == 'Darwin':
-            return _engine(home, project, 'mac', download, None, search_path, hermes)
+            return _engine(home, project, 'mac', download, opener or urllib.request.urlopen, search_path, hermes)
         if system == 'Linux':
             return _engine(home, project, 'portable', download, opener or urllib.request.urlopen, None, hermes)
         if system == 'Windows':
-            return _windows(home, project)
+            if _windows_arm64():
+                return _windows(home, project)
+            return _engine(home, project, 'windows', download, opener or urllib.request.urlopen, None, hermes)
     except (ValueError, OSError):
         return [_item('content:registration', 'Регистрация Content нечитаема или содержит ссылку; Content не изменялся.',
                       'skipped:invalid-registration')]
     return []
 
 
-def _entries(top, links):
-    """(relative posix, 'dir'|'file'|'link') for a tree; links only inside ``links``."""
+class LinkedObject(ValueError):
+    """A link or special object the copy must not follow. The message stays a fixed
+    literal; ``relative`` (inside the version) and ``kind`` go to the report detail."""
+    relative, kind = '', ''
+
+
+def _refuse(relative, kind):
+    error = LinkedObject('Linked path preserved')
+    error.relative, error.kind = relative, kind
+    raise error
+
+
+def _plain_text(path):
+    text = str(path)
+    if text.startswith(PREFIX + 'UNC' + BACKSLASH):
+        return BACKSLASH * 2 + text[len(PREFIX) + 4:]
+    return text[len(PREFIX):] if text.startswith(PREFIX) else text
+
+
+def _link_target(path):
+    """Absolute, normalised target of a symlink or junction (extended prefix removed)."""
+    target = _plain_text(os.readlink(str(path)))
+    if target.startswith(BACKSLASH + '??' + BACKSLASH):  # NT object prefix of a junction
+        target = target[4:]
+    module = ntpath if os.name == 'nt' else os.path
+    if not module.isabs(target):
+        target = module.join(module.dirname(_plain_text(path)), target)
+    return module.normcase(module.normpath(target))
+
+
+def _installer_junction(top, relative, path, zones):
+    """The installer's own directory link: directly inside a zone, pointing at a real
+    directory next to it in the same zone of this version (uv minor-version link)."""
+    parent = relative.rsplit('/', 1)[0] if '/' in relative else ''
+    if parent not in zones:
+        return False
+    try:
+        target = _link_target(path)
+        module = ntpath if os.name == 'nt' else os.path
+        zone = module.normcase(module.normpath(_plain_text(top / parent)))
+        if module.dirname(target) != zone or module.basename(target) == module.basename(_plain_text(path)):
+            return False
+        real = Path(_long(target))
+        info = real.lstat()
+        return stat.S_ISDIR(info.st_mode) and not stat.S_ISLNK(info.st_mode) and not getattr(info, 'st_file_attributes', 0) & 0x400
+    except (OSError, ValueError):
+        return False
+
+
+def _entries(top, links, junctions=()):
+    """(relative posix, 'dir'|'file'|'link'|'junction') for a tree; links only inside
+    ``links``; directory links only as the installer's own junctions in ``junctions``."""
     result = []
+    top = Path(_long(top))
     for directory, dirnames, filenames in os.walk(str(top)):
         base = Path(directory)
         for name in sorted(dirnames + filenames):
             path = base / name
             relative = path.relative_to(top).as_posix()
             info = path.lstat()
+            reparse = bool(getattr(info, 'st_file_attributes', 0) & 0x400)
+            if (reparse or stat.S_ISLNK(info.st_mode)) and junctions and _installer_junction(top, relative, path, junctions):
+                result.append((relative, 'junction'))
+                if name in dirnames:
+                    dirnames.remove(name)
+                continue
+            if reparse and not stat.S_ISLNK(info.st_mode):
+                _refuse(relative, 'junction')  # Never followed or linked.
             if stat.S_ISLNK(info.st_mode):
                 if not (links and (relative + '/').startswith(links + '/')):
-                    raise ValueError('Linked path preserved')
+                    _refuse(relative, 'symlink')
                 result.append((relative, 'link'))
                 if name in dirnames:
                     dirnames.remove(name)
@@ -321,7 +566,7 @@ def _entries(top, links):
             elif stat.S_ISREG(info.st_mode):
                 result.append((relative, 'file'))
             else:
-                raise ValueError('Special object preserved')
+                _refuse(relative, 'special')
     return result
 
 
@@ -340,10 +585,15 @@ def _copy_intact(source, copy, expected, spec, additions=None, skip=()):
     try:
         if not copy.is_dir() or copy.is_symlink():
             return False
-        for relative, kind in _entries(source, spec['links']):
+        source, copy = Path(_long(source)), Path(_long(copy))
+        for relative, kind in _entries(source, spec['links'], spec.get('junctions', ())):
             if _under(relative, spec['dynamic']) or _derived(relative) or relative in (additions or {}) or relative in skip:
                 continue
             mine, theirs = copy / relative, source / relative
+            if kind == 'junction':
+                if os.path.lexists(str(mine)):
+                    return False  # The copy never holds a junction (FIX_0590 review): this one is foreign.
+                continue
             if kind == 'dir':
                 if mine.is_symlink() or not mine.is_dir():
                     return False
@@ -358,7 +608,7 @@ def _copy_intact(source, copy, expected, spec, additions=None, skip=()):
             if (a.st_ino, a.st_dev) != (b.st_ino, b.st_dev) and (a.st_size != b.st_size or mine.read_bytes() != theirs.read_bytes()):
                 return False
         if spec['links']:
-            python = copy / spec['links'] / ('Scripts/python.exe' if os.name == 'nt' else 'bin/python')
+            python = copy / spec['links'] / spec['python']
             if not os.path.lexists(str(python)):
                 return False
         for relative, data in (additions or {}).items():
@@ -373,12 +623,14 @@ def _copy_intact(source, copy, expected, spec, additions=None, skip=()):
 def _build_copy(source, releases, name, expected, spec, home, additions=None):
     """Hard-link ``source`` into ``releases/<name>``; fixed and added files are new. None or a status."""
     final = releases / name
-    temporary = releases / (name + '.tmp-' + uuid.uuid4().hex[:12])
-    _plain(temporary, home)
+    plain_temporary = releases / (name + '.tmp-' + uuid.uuid4().hex[:12])
+    _plain(plain_temporary, home)
+    # Extended paths for every file operation (BUG 0020); _plain checks use the plain ones.
+    temporary, source = Path(_long(plain_temporary)), Path(_long(source))
     os.mkdir(str(temporary), 0o700)
     try:
         os.chmod(str(temporary), stat.S_IMODE(source.stat().st_mode))
-        for relative, kind in _entries(source, spec['links']):
+        for relative, kind in _entries(source, spec['links'], spec.get('junctions', ())):
             src, dst = source / relative, temporary / relative
             if any(relative.startswith(p + '/') for p in spec['fresh']):
                 continue  # Generated output: recreated empty, never linked.
@@ -389,6 +641,8 @@ def _build_copy(source, releases, name, expected, spec, home, additions=None):
                 os.chmod(str(dst), stat.S_IMODE(src.stat().st_mode))
             elif kind == 'link':
                 os.symlink(os.readlink(str(src)), str(dst))
+            elif kind == 'junction':
+                continue  # Not recreated: pyvenv.cfg of the copy reaches <v>'s base Python by an absolute path.
             elif relative in expected:
                 fd = os.open(str(dst), os.O_WRONLY | os.O_CREAT | os.O_EXCL, stat.S_IMODE(src.stat().st_mode))
                 with os.fdopen(fd, 'wb') as out:
@@ -400,8 +654,10 @@ def _build_copy(source, releases, name, expected, spec, home, additions=None):
                 try:
                     os.link(str(src), str(dst))
                 except OSError as error:
-                    if error.errno in {errno.EXDEV, errno.EPERM, errno.EMLINK, errno.EACCES,
-                                       getattr(errno, 'ENOTSUP', -1), getattr(errno, 'EOPNOTSUPP', -1)}:
+                    # Windows: 1 invalid function (FAT/exFAT), 17 other volume, 50 unsupported, 1142 too many links.
+                    if (error.errno in {errno.EXDEV, errno.EPERM, errno.EMLINK, errno.EACCES,
+                                        getattr(errno, 'ENOTSUP', -1), getattr(errno, 'EOPNOTSUPP', -1)}
+                            or getattr(error, 'winerror', None) in {1, 17, 50, 1142}):
                         return 'skipped:hardlink-unavailable'
                     raise
         for relative, data in (additions or {}).items():
@@ -420,7 +676,7 @@ def _build_copy(source, releases, name, expected, spec, home, additions=None):
         _plain(final, home)
         if os.path.lexists(str(final)):
             raise ValueError('Concurrent Content edit preserved')
-        os.rename(str(temporary), str(final))
+        os.rename(str(temporary), _long(final))
         return None
     finally:
         # Only the partial tree this call created: links and new files, never <v>.
@@ -492,11 +748,21 @@ def _cutout_additions(source, states, home):
     swift = source / 'tools/person-cutout.swift'
     try:
         _plain(swift, home)
-        if not swift.is_file() or _file_sha(swift) != CUTOUT_SOURCE_SHA256:
+        # <v> ships the released source; this patch's own copy holds it with SWIFT_FIX.
+        if not swift.is_file() or _file_sha(swift) not in {CUTOUT_SOURCE_SHA256, CUTOUT_FIXED_SOURCE_SHA256}:
             return {}
     except (ValueError, OSError):
         return {}  # A linked or unreadable source: no binary, the rest of Content is still repaired.
-    return {CUTOUT_RELATIVE: _prebuilt_cutout()}
+    return {CUTOUT_RELATIVE: _prebuilt_cutout(), U2NET_SCRIPT_RELATIVE: U2NET_SCRIPT}
+
+
+def _previous_expected(states, pairs_by_file):
+    """Bytes an earlier patch's copy holds: <v> with that patch's own fixes."""
+    expected = {}
+    for relative, (_, data) in states.items():
+        pairs = pairs_by_file.get(relative)
+        expected[relative] = fragment_fix(data, pairs) if pairs and fragment_state(data, pairs) == 'applicable' else data
+    return expected
 
 
 def _engine(home, project, kind, download, opener, search_path, hermes=None):
@@ -516,10 +782,12 @@ def _engine(home, project, kind, download, opener, search_path, hermes=None):
     _plain(current, home); _plain(copy, home); _plain(origin, home)
     if not current.is_dir() or (previous and not origin.is_dir()):
         return [_item('content:' + kind + '-repair', 'Активная версия Content отсутствует; нужна штатная установка.', 'skipped:content-incomplete')]
-    if kind == 'portable':
-        runtime = current / 'portable/runtime/bin/python'
-        if not (current / 'portable/cli.py').is_file() or not os.path.lexists(str(runtime)):
-            return [_item('content:portable-repair', 'Content установлен не полностью; ремонт после завершения установки.', 'skipped:content-incomplete')]
+    portable = kind in ('portable', 'windows')
+    code = {'portable': 'content:portable-repair', 'windows': 'content:windows-repair'}.get(kind, 'content:mac-repair')
+    if portable:
+        runtime = current / 'portable/runtime' / spec['python']
+        if not (current / 'portable/cli.py').is_file() or not os.path.lexists(_long(runtime)):
+            return [_item(code, 'Content установлен не полностью; ремонт после завершения установки.', 'skipped:content-incomplete')]
     # A new copy always links the installer's own version: an earlier patch's copy is replaced, never edited.
     source = origin if previous else current
     states = _file_states(source, spec['fixes'], home)
@@ -532,13 +800,13 @@ def _engine(home, project, kind, download, opener, search_path, hermes=None):
                 kept.append(relative)  # The learner's own edit is linked as is.
     fixes = {r: spec['fixes'][r] for r in states}
     bugs = ', '.join(sorted({fixes[r][0] for r, (s, _) in states.items() if s == 'applicable'}))
-    model = _model_state(current, home) if kind == 'portable' else None
+    model = _model_state(current, home) if portable else None
     want_model = model == 'missing' and download
     additions = _cutout_additions(source, states, home) if spec['additions'] else {}
-    code = 'content:portable-repair' if kind == 'portable' else 'content:mac-repair'
-    label = ('Карусель: тема client (BUG 0008); PDF кадра урока (BUG 0009); модель U2Net (BUG 0010)' if kind == 'portable'
+    label = ('Карусель: тема client (BUG 0008); PDF кадра урока (BUG 0009); модель U2Net (BUG 0010)' if portable
              else 'doc.sh и pip.sh: временные файлы каждого запуска отдельно (OBS 0008); '
-                  'вырезание человека: готовая программа person-cutout и Python из Content/.venv (BUG 0013)')
+                  'вырезание человека: готовая программа person-cutout с повтором Vision на CPU, '
+                  'запасной путь U2Net и Python из Content/.venv (BUG 0013, TASK53)')
     if kept:
         label += '. Изменённый вручную ' + ', '.join(kept) + ' сохранён как есть'
     items = []
@@ -564,9 +832,12 @@ def _engine(home, project, kind, download, opener, search_path, hermes=None):
             items.append(_item(code, label + '. Работает починенная копия ' + name + '.', 'unchanged'))
     elif any(s in {'edited', 'missing', 'linked'} for s, _ in states.values()):
         items.append(_item(code, label + '. Файлы версии изменены вручную или неизвестны; ничего не тронуто.', 'skipped:edited'))
-    elif previous and not _copy_intact(origin, current, {r: (fragment_fix(d, fixes[r][1]) if r in spec['previous_fixes'] and s == 'applicable' else d)
-                                                         for r, (s, d) in states.items()}, spec, skip=(CUTOUT_RELATIVE,)):
-        items.append(_item(code, label + '. Прежняя починенная копия ' + active + ' изменена; ничего не тронуто.', 'skipped:repair-copy-edited'))
+    elif previous and not _copy_intact(origin, current, _previous_expected(states, spec['previous_fixes'].get(previous, {})),
+                                       spec, skip=(CUTOUT_RELATIVE,)):
+        items.append(_item(code, label + '. Прежняя починенная копия ' + active + ' изменена; ничего не тронуто. '
+                           'Чтобы перейти на ' + name + ', верните active.json на ' + base + ' (как это делает штатная переустановка) '
+                           'и повторите ремонт: он соберёт новую копию, а изменённая ' + active + ' останется как есть.',
+                           'skipped:repair-copy-edited'))
     elif not bugs and not want_model and not additions:
         items.append(_item(code, label + '. Уже исправлено.', 'unchanged'))
     else:
@@ -587,9 +858,10 @@ def _engine(home, project, kind, download, opener, search_path, hermes=None):
                                    'skipped:repair-copy-edited'))
         else:
             try:
-                _entries(source, spec['links'])
-            except (ValueError, OSError):
-                items.append(_item(code, label + '. В версии есть ссылка или особый объект; копия не создаётся.', 'skipped:linked-path'))
+                _entries(source, spec['links'], spec.get('junctions', ()))
+            except (ValueError, OSError) as error:
+                where = (' (' + error.relative + ', ' + error.kind + ')') if isinstance(error, LinkedObject) else ''
+                items.append(_item(code, label + '. В версии есть ссылка или особый объект' + where + '; копия не создаётся.', 'skipped:linked-path'))
             else:
                 copy_ok = True
 
@@ -607,7 +879,7 @@ def _engine(home, project, kind, download, opener, search_path, hermes=None):
                                                                   if x) or 'BUG 0010') + '. Создать починенную копию ' + name +
                                    ' (жёсткие ссылки на ' + base + ', исправленные и добавленные файлы новые) и переключить active.json.',
                                    'needs-fix', [pointer], build))
-    if kind == 'portable':
+    if portable:
         if not on_copy and copy.is_dir():
             model = _model_state(copy, home)  # The model lives in the copy, never in <v>.
         items.append(_model_item(home, current, copy, on_copy, copy_ok, model, download, opener))
@@ -615,7 +887,10 @@ def _engine(home, project, kind, download, opener, search_path, hermes=None):
         # The venv only helps a script that reads it: the fixed copy (built now or
         # already active) or a learner's own edit that already points there.
         will_fix = items[0]['status'] == 'needs-fix' and 'person-cutout.sh' in states
-        items += [i for i in (_shared_panel_item(home, current),
+        model_item = None
+        if U2NET_SCRIPT_RELATIVE in additions:
+            model_item = _mac_model_item(home, current if on_copy else copy, copy_ok, download, opener)
+        items += [i for i in (_shared_panel_item(home, current), model_item,
                               _cutout_item(home, project, current, search_path, hermes, will_fix)) if i is not None]
     return items
 
@@ -645,8 +920,41 @@ def _model_item(home, current, copy, on_copy, copy_ok, model, download, opener):
     return _item(code, detail + ' Загружается в починенную копию ' + directory.name + '.', 'needs-fix', [], apply)
 
 
+def _mac_model_item(home, directory, copy_ok, download, opener):
+    """TASK53: the U2Net fallback of the Mac copy needs the same pinned model."""
+    code = 'content:mac-u2net-model'
+    detail = ('Запасное вырезание без Apple Vision (песочница без Neural Engine): модель U2Net из официального '
+              'релиза rembg, SHA256 закреплён (TASK53).')
+    target = directory / 'resources/models' / MODEL_NAME
+    try:
+        _plain(target, home)
+        if target.exists():
+            if target.is_file() and target.stat().st_size == MODEL_SIZE and _file_sha(target) == MODEL_SHA256:
+                return _item(code, detail + ' Модель на месте.', 'unchanged')
+            return _item(code, detail + ' Существующий файл модели отличается; сохранён.', 'skipped:model-differs')
+    except (ValueError, OSError):
+        return _item(code, detail + ' Путь к модели содержит ссылку; не изменялся.', 'skipped:linked-path')
+    if not download:
+        return _item(code, detail + ' Загрузка отключена.', 'skipped:download-disabled')
+    if not copy_ok:
+        return _item(code, detail + ' Нет исправной починенной копии; модель в версию установщика не кладётся.', 'skipped:repair-copy-unavailable')
+
+    def apply():
+        if not directory.is_dir() or _read(directory / U2NET_SCRIPT_RELATIVE, home) != U2NET_SCRIPT:
+            return 'unavailable:repair-copy-missing'
+        models = directory / 'resources/models'
+        _plain(models, home)
+        models.mkdir(parents=True, exist_ok=True)  # Inside the patch's own copy, never <v>.
+        _plain(target, home)
+        if target.exists():
+            raise ValueError('Concurrent Content edit preserved')
+        return download_model(target, home, opener)
+    return _item(code, detail + ' Загружается в починенную копию ' + directory.name + '.', 'needs-fix', [], apply)
+
+
 def _windows(home, project):
-    """Diagnosis only: a sibling copy needs extended paths and short names (BUG 0020)."""
+    """Windows ARM64: diagnosis only. Its Content runtime differs (native whisper,
+    no sherpa) and the course does not support Windows on ARM (owner 08.11)."""
     active, _ = _version(project / 'tools/agents-engine/active.json', home)
     if active is None:
         return []
@@ -654,8 +962,7 @@ def _windows(home, project):
     _plain(current, home)
     if not (current / 'portable/cli.py').is_file():
         return []
-    reason = (' Ремонт на Windows только диагностикой: починенной копии нужны жёсткие ссылки и длинные пути pip '
-              '(BUG 0020), проверено лишь на hosted Windows; адресный ремонт по FIX_20261109_windows_content.')
+    reason = ' Windows на ARM курс не поддерживает: ремонт Content здесь только диагностикой.'
     items = []
     for relative, (bug, _) in ENGINES['portable']['fixes'].items():
         state, _ = _file_states(current, {relative: ENGINES['portable']['fixes'][relative]}, home)[relative]
@@ -663,14 +970,14 @@ def _windows(home, project):
         if state == 'fixed':
             items.append(_item(code, bug + ': исправлено.', 'unchanged'))
         elif state == 'applicable':
-            items.append(_item(code, bug + ': дефект найден.' + reason, 'skipped:windows-diagnostic-only'))
+            items.append(_item(code, bug + ': дефект найден.' + reason, 'skipped:windows-arm64-unsupported'))
         elif state != 'missing':
             items.append(_item(code, bug + ': файл изменён вручную; не изменялся.', 'skipped:edited'))
     model = _model_state(current, home)
     if model == 'present':
         items.append(_item('content:u2net-model', 'BUG 0010: модель на месте.', 'unchanged'))
     elif model == 'missing':
-        items.append(_item('content:u2net-model', 'BUG 0010: нет модели U2Net.' + reason, 'skipped:windows-diagnostic-only'))
+        items.append(_item('content:u2net-model', 'BUG 0010: нет модели U2Net.' + reason, 'skipped:windows-arm64-unsupported'))
     return items
 
 
@@ -727,35 +1034,77 @@ def _api_asset(opener, url):
     return assets[0]
 
 
+ATTEMPTS = 3          # per source: GitHub web release URL, then its REST asset (FIX_0590)
+RETRY_PAUSE = 5       # seconds, doubled after each failed attempt
+_sleep = time.sleep
+
+
+STORAGE_ERRNOS = {errno.ENOSPC, errno.EACCES, errno.EPERM, errno.EROFS, getattr(errno, 'EDQUOT', -1)}
+
+
+def _storage(error):
+    """A full disk or a refused write of the model file: not the network, not worth a retry."""
+    return (isinstance(error, OSError) and not isinstance(error, urllib.error.URLError)
+            and error.errno in STORAGE_ERRNOS)
+
+
+def _transient(error):
+    """A 5xx, 429, timeout or dropped connection is worth another attempt; a 4xx or a disk error is not."""
+    if isinstance(error, urllib.error.HTTPError):
+        return error.code >= 500 or error.code == 429
+    return not _storage(error)
+
+
+def _attempts(fetch):
+    """'ok' | 'checksum' | 'storage' | 'network'. Wrong bytes are never retried: the source answered."""
+    transport = (OSError, http.client.HTTPException)
+    for attempt in range(ATTEMPTS):
+        try:
+            return fetch()
+        except transport as error:
+            if _storage(error):
+                return 'storage'
+            if not _transient(error) or attempt == ATTEMPTS - 1:
+                return 'network'
+            _sleep(RETRY_PAUSE * 2 ** attempt)
+    return 'network'
+
+
 def download_model(target, root, opener):
-    """Primary release URL, then the GitHub REST asset endpoint. Offline is not fatal.
+    """Primary release URL, then the GitHub REST asset endpoint, each with bounded
+    retries on 5xx/429/timeouts. Offline is not fatal and never silent.
 
     Link or concurrency errors still raise ValueError; only transport failures
     and wrong bytes become an ``unavailable:*`` result with nothing written.
     """
     transport = (OSError, http.client.HTTPException)
     failures = set()
-    try:
-        outcome = _fetch_verified(opener, urllib.request.Request(MODEL_URL, headers={'User-Agent': AGENT}), target, root)
+    outcome = _attempts(lambda: _fetch_verified(opener, urllib.request.Request(MODEL_URL, headers={'User-Agent': AGENT}), target, root))
+    if outcome == 'ok':
+        return None
+    failures.add(outcome)
+    asset = None
+    for attempt in range(ATTEMPTS):
+        try:
+            asset = _api_asset(opener, MODEL_URL)
+            break
+        except transport as error:
+            if not _transient(error) or attempt == ATTEMPTS - 1:
+                break
+            _sleep(RETRY_PAUSE * 2 ** attempt)
+        except (ValueError, KeyError, TypeError, AttributeError):
+            break  # Unexpected metadata (json errors are ValueError): not followed.
+    if 'storage' in failures:
+        return 'unavailable:disk'  # The disk refused the file: another source would not help.
+    if asset:
+        outcome = _attempts(lambda: _fetch_verified(opener, urllib.request.Request(asset, headers={'Accept': 'application/octet-stream', 'User-Agent': AGENT}), target, root))
         if outcome == 'ok':
             return None
         failures.add(outcome)
-    except transport:
-        failures.add('network')
-    try:
-        asset = _api_asset(opener, MODEL_URL)
-    except transport + (ValueError, KeyError, TypeError, AttributeError):
-        asset = None  # Unreachable API or unexpected metadata (json errors are ValueError).
-    if asset:
-        try:
-            outcome = _fetch_verified(opener, urllib.request.Request(asset, headers={'Accept': 'application/octet-stream', 'User-Agent': AGENT}), target, root)
-            if outcome == 'ok':
-                return None
-            failures.add(outcome)
-        except transport:
-            failures.add('network')
     else:
         failures.add('network')
+    if 'storage' in failures:
+        return 'unavailable:disk'
     return 'unavailable:checksum' if 'checksum' in failures else 'unavailable:network'
 
 
@@ -771,10 +1120,10 @@ def _shared_panel_item(home, engine):
                  'изоляция параллельных запусков требует новой сборки движка (OBS 0008).', 'skipped:needs-native-build')
 
 
-def _cutout_python_ready(python):
+def _cutout_python_ready(python, modules=CUTOUT_MODULES):
     env = {k: v for k, v in os.environ.items() if k.upper() not in {'PYTHONPATH', 'PYTHONHOME', 'VIRTUAL_ENV'}}
     try:
-        return subprocess.run([python, '-I', '-B', '-c', 'import PIL, numpy, cv2'], capture_output=True,
+        return subprocess.run([python, '-I', '-B', '-c', 'import ' + modules], capture_output=True,
                               env=env, timeout=120).returncode == 0
     except (OSError, subprocess.TimeoutExpired):
         return False
@@ -887,6 +1236,50 @@ def create_cutout_venv(project, home, uv):
             shutil.rmtree(str(temporary), True)
 
 
+CUTOUT_OWN_DISTS = ('numpy-2.5.4.dist-info', 'pillow-13.0.0.dist-info', 'opencv_python_headless-5.0.0.93.dist-info')
+
+
+def _our_cutout_venv(venv):
+    """The Content/.venv a repair of v2026.11.10.2/.3 built: CPython 3.12.12 and its three
+    pinned wheels. Anything else (a learner's or support's own venv) is never extended."""
+    try:
+        config = (venv / 'pyvenv.cfg').read_text(encoding='utf-8', errors='replace')
+        versions = re.findall(r'^version(?:_info)?\s*=\s*([0-9.]+)', config, re.M)
+        site = venv / 'lib/python3.12/site-packages'
+        return CUTOUT_PYTHON in versions and site.is_dir() and all((site / d).is_dir() for d in CUTOUT_OWN_DISTS)
+    except OSError:
+        return False
+
+
+def add_onnxruntime(project, home, uv):
+    """TASK53: an existing working Content/.venv (Pillow/NumPy/OpenCV of v2026.11.10.2)
+    gets only the pinned onnxruntime wheel. Nothing else in it is touched."""
+    venv = project / '.venv'
+    _plain(venv, home)
+    python = venv / 'bin/python'
+    if not _cutout_python_ready(str(python), CUTOUT_BASE_MODULES):
+        raise ValueError('Concurrent Content edit preserved')
+    env = {k: v for k, v in os.environ.items() if k.upper() not in {'PYTHONPATH', 'PYTHONHOME', 'VIRTUAL_ENV', 'CONDA_PREFIX'}}
+    env['UV_NO_CONFIG'] = '1'
+    work = Path(tempfile.mkdtemp(prefix='content-cutout-'))
+    try:
+        requirements = work / 'requirements.txt'
+        requirements.write_text(CUTOUT_ORT_REQUIREMENT, encoding='utf-8')
+        args = [uv, 'pip', 'install', '--python', str(python), '--require-hashes', '--only-binary', ':all:',
+                '--no-deps', '-r', str(requirements)]
+        try:
+            result = subprocess.run(args, cwd=str(work), env=env, capture_output=True, timeout=1800)
+        except subprocess.TimeoutExpired:
+            return 'unavailable:network'
+        except OSError:
+            return 'unavailable:cutout-runtime'
+        if result.returncode:
+            return _uv_outcome(result)
+        return None if _cutout_python_ready(str(python)) else 'unavailable:cutout-runtime'
+    finally:
+        shutil.rmtree(str(work), True)
+
+
 def _active_script_uses_venv(home, project):
     """Does the person-cutout.sh of the version active.json names right now read Content/.venv?"""
     try:
@@ -915,10 +1308,29 @@ def _cutout_item(home, project, engine, search_path, hermes=None, will_fix=False
     if CUTOUT_CALL not in data and b'.venv' not in data:
         return None
     code = 'content:mac-cutout-python'
-    detail = 'Вырезание человека на Mac: Pillow/NumPy/OpenCV в Documents/Content/.venv (CPython ' + CUTOUT_PYTHON + ', закреплённые колёса, BUG 0013).'
+    detail = ('Вырезание человека на Mac: Pillow/NumPy/OpenCV и onnxruntime (запасной путь U2Net) в Documents/Content/.venv '
+              '(CPython ' + CUTOUT_PYTHON + ', закреплённые колёса, BUG 0013, TASK53).')
     if os.path.lexists(str(venv)):
-        if venv.is_dir() and not venv.is_symlink() and _cutout_python_ready(str(venv / 'bin/python')):
+        python = str(venv / 'bin/python')
+        if venv.is_dir() and not venv.is_symlink() and _cutout_python_ready(python):
             return _item(code, detail + ' Среда на месте.', 'unchanged')
+        if venv.is_dir() and not venv.is_symlink() and _cutout_python_ready(python, CUTOUT_BASE_MODULES):
+            if not _our_cutout_venv(venv):
+                return _item(code, detail + ' Content/.venv создана не ремонтом (другая версия Python или набор пакетов); '
+                             'onnxruntime в неё не ставится, запасной путь U2Net недоступен. Чтобы его получить, '
+                             'переименуйте эту папку, и повтор ремонта создаст свою среду.', 'skipped:venv-not-ours')
+            if not _macos_supported():
+                return _item(code, detail + ' Для onnxruntime нужна macOS 13 (Apple Silicon) или 14 (Intel); запасной путь недоступен.',
+                             'skipped:macos-too-old')
+            uv = _uv(home, search_path, hermes)
+            if not uv:
+                return _item(code, detail + ' Нет uv из установки Hermes; нужна штатная установка.', 'skipped:uv-missing')
+
+            def add():
+                if not _active_script_uses_venv(home, project):
+                    return 'skipped:script-not-repaired'
+                return add_onnxruntime(project, home, uv)
+            return _item(code, detail + ' Среда есть; добавить только onnxruntime (сеть: PyPI).', 'needs-fix', [], add)
         return _item(code, detail + ' Content/.venv уже есть, но без нужных библиотек; не трогается '
                      '(удалите эту папку, и повтор ремонта создаст среду заново).', 'skipped:venv-preserved')
     if not will_fix and b'.venv' not in data:

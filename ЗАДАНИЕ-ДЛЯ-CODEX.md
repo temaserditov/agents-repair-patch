@@ -1,10 +1,10 @@
 Это полное задание для Codex на моём компьютере/сервере, не просьба объяснить текст.
 Выполни работу до результата; лишних подтверждений не запрашивай.
 
-Пакет: https://github.com/temaserditov/agents-repair-patch/releases/download/v2026.11.10.3/agents-repair-patch-v2026.11.10.3.zip
+Пакет: https://github.com/temaserditov/agents-repair-patch/releases/download/v2026.11.10.4/agents-repair-patch-v2026.11.10.4.zip
 SHA-256 ZIP: указан в задании ученика и в SHA256SUMS релиза (внутри архива не хранится)
-Исходники: https://github.com/temaserditov/agents-repair-patch/tree/v2026.11.10.3
-Версия: v2026.11.10.3. Commit: 9bca80937c43b08a64bfa1abd063284625fd8a52.
+Исходники: https://github.com/temaserditov/agents-repair-patch/tree/v2026.11.10.4
+Версия: v2026.11.10.4. Commit: 169e9c72a459421832b0b3f6d7006ea9c1fac797.
 Не скачивай другие версии, не меняй SHA. Если в строках «Пакет», «Исходники»
 или «Версия» осталось поле в двойных фигурных скобках, остановись: опубликованный
 пакет ещё не указан.
@@ -14,8 +14,8 @@ SHA-256 ZIP: указан в задании ученика и в SHA256SUMS ре
 
 1. Скачай ZIP в новую пустую папку и проверь SHA-256. Если ссылка отвечает 5xx
    (сбой GitHub), скачай тот же файл через API: из
-   `https://api.github.com/repos/temaserditov/agents-repair-patch/releases/tags/v2026.11.10.3`
-   возьми `url` ассета с именем `agents-repair-patch-v2026.11.10.3.zip` и скачай его
+   `https://api.github.com/repos/temaserditov/agents-repair-patch/releases/tags/v2026.11.10.4`
+   возьми `url` ассета с именем `agents-repair-patch-v2026.11.10.4.zip` и скачай его
    `curl -fL -H 'Accept: application/octet-stream' <url> -o <имя>`. SHA-256 сверяй
    в любом случае; при несовпадении остановись. Распакуй, прочитай README и
    скрипты. Не запускай неизвестный файл до проверки. `vendor/bin/person-cutout` —
@@ -248,6 +248,15 @@ try{
    Покажи путь к JSON в «Загрузки», результаты и всё, что осталось
    непроверенным. Отдельно назови версию Hermes и список агентов из отчёта.
    Не объявляй успех, если verify не прошёл; пропуск проверки также назови честно.
+
+Вырезание фона на Mac (Content, `person-cutout.sh`) запускай ВНЕ песочницы
+Codex — с полными правами, как штатное обновление. В песочнице у Apple Vision нет
+доступа к Neural Engine, и она пишет «ANECF error: failed to load ANE model» или
+«Failed to create CVPixelBufferPool». Это не поломка установки. Программа сама
+повторит Vision на CPU, а если и это не выйдет, починенная копия вырежет человека
+моделью U2Net. Какой путь сработал, видно в выводе: `путь vision-ane`,
+`путь vision-cpu` или `путь u2net`. Если вывод говорит «нет модели U2Net», повтори
+ремонт (шаг 5): модель скачивается в копию Content с проверкой SHA-256.
 
 Если владелец сам правил SOUL.md агента: сохрани его текст. Панель может
 подсветить его как «без служебного маркера». Штатное обновление до

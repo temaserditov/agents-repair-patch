@@ -191,6 +191,30 @@ def sha(data):
     return hashlib.sha256(data).hexdigest()
 
 
+# agents-tooling-bootstrap (the public student add-on) appends exactly one marked
+# block to a profile's AGENTS.md/SOUL.md; a platform update may move it under the
+# personal additions heading it creates. Such a file is the package text plus the
+# add-on (FIX_0572 in diagnostics, FIX_0596 here), not a personal edit. Mirrors
+# withoutToolingBlock() of vendor/agents-diagnose.mjs.
+TOOLING_BEGIN, TOOLING_END = '<!-- agents-student-tooling:start -->', '<!-- agents-student-tooling:end -->'
+TOOLING_HEADING = re.compile(r'\n*## Личные дополнения \(перенесены при обновлении [^)\n]{1,120}\)$')
+
+
+def without_tooling_block(data):
+    """Byte variants of ``data`` without its one tooling block, or None."""
+    try:
+        # TextDecoder in the diagnostics drops a BOM the same way.
+        text = data.decode('utf-8-sig').replace('\r\n', '\n')
+    except UnicodeError:
+        return None
+    start, end = text.find(TOOLING_BEGIN), text.find(TOOLING_END)
+    if start < 0 or end < start or text.find(TOOLING_BEGIN, start+1) >= 0 or text.find(TOOLING_END, end+1) >= 0:
+        return None
+    rest = (text[:start] + text[end+len(TOOLING_END):]).rstrip()
+    rest = TOOLING_HEADING.sub('', rest).rstrip()
+    return [(rest+'\n').encode(), rest.encode()]
+
+
 def normalized_soul(data):
     return data.decode('utf-8-sig').replace('\r\n', '\n').replace('\r', '\n').lstrip('\ufeff').strip().encode()
 
@@ -459,6 +483,9 @@ class Repair:
         broken = not normalized or sha(normalized) in self.upstream
         if not broken:
             expected = self.files.get(name+'/SOUL.md')
+            if expected!=sha(current) and expected and any(sha(v)==expected for v in (without_tooling_block(current) or [])):
+                self.add('soul:'+name, 'unchanged', 'SOUL из пакета и один блок дооснащения agents-student-tooling (штатное дополнение).')
+                return
             self.add('soul:'+name, 'unchanged' if expected==sha(current) else 'skipped:user-text', 'Текст ученика сохранён; стандартный SOUL отсутствует.')
             return
         incoming = None
@@ -861,7 +888,7 @@ class Repair:
             updated, changed = load('profile-context').transform(raw)
         except ValueError:
             debug_exception(self.stage)
-            self.add('profile-context', 'skipped:unknown-runtime', 'Загрузчик Hermes отличается от проверенного 0.23.0; не изменялся.', 'warning')
+            self.add('profile-context', 'skipped:unknown-runtime', 'Загрузчик Hermes отличается от проверенного 0.23.x; не изменялся.', 'warning')
             return
         if not changed:
             self.add('profile-context', detail='Каждый агент читает свой AGENTS.md (Hermes 0.23).')
